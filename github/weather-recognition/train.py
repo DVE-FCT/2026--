@@ -3,7 +3,8 @@ import time
 import os
 import re
 import torch
-from torch import nn
+import torch.nn as nn
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from torch.amp import GradScaler, autocast
@@ -12,6 +13,40 @@ from config import Common, Train
 from model import model as weatherModel
 from data_loader import trainLoader, valLoader
 from torch import optim
+
+# ============================================================
+# Focal Loss — 解决类别不平衡与难分样本
+# ============================================================
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for multi-class classification.
+    FL(p_t) = -α_t * (1 - p_t)^γ * log(p_t)
+    γ（gamma）: 聚焦参数，γ 越大越关注困难样本。默认 2.0
+    α（alpha）: 类别权重，可传入 8 维 tensor 指定每类权重。默认每类权重 1.0
+    """
+    def __init__(self, gamma=2.0, alpha=None, reduction='mean'):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        p = F.softmax(inputs, dim=1)
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = p.gather(1, targets.unsqueeze(1)).squeeze(1)
+        focal_weight = (1 - pt) ** self.gamma
+        loss = focal_weight * ce_loss
+
+        if self.alpha is not None:
+            alpha_weight = self.alpha.to(targets.device).gather(0, targets)
+            loss = alpha_weight * loss
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        return loss
+
 
 # ============================================================
 # 自动创建编号文件夹 model_1, model_2, ...
@@ -54,7 +89,27 @@ print(f"{'='*60}\n")
 
 model = weatherModel
 model.to(Common.device)
-criterion = nn.CrossEntropyLoss()
+
+# ---- Focal Loss alpha 权重计算（基于 model_1 测试集每类准确率）----
+per_class_acc = {
+    "cloudy":  0.4965,
+    "haze":    0.7831,
+    "rainy":   0.6405,
+    "shine":   0.9500,
+    "snow":    0.7662,
+    "sunny":   0.5821,
+    "sunrise": 1.0000,
+    "thunder": 0.9530,
+}
+eps = 0.01
+alpha_list = [1.0 / (per_class_acc[c] + eps) for c in Common.labels]
+alpha_tensor = torch.tensor(alpha_list, dtype=torch.float)
+alpha_tensor = alpha_tensor / alpha_tensor.sum() * len(Common.labels)
+print(f"[Focal Loss] alpha 权重（基于每类准确率）: ")
+for c, a in zip(Common.labels, alpha_tensor.tolist()):
+    print(f"  {c:>8s}: {a:.4f}  (准确率 {per_class_acc[c]:.4f})")
+
+criterion = FocalLoss(gamma=2.0, alpha=alpha_tensor)
 optimizer = optim.Adam(model.parameters(), lr=Train.lr)
 scaler = GradScaler('cuda')
 writer = SummaryWriter(log_dir=Train.logDir, flush_secs=500)
@@ -76,12 +131,13 @@ def train(epoch):
         optimizer.zero_grad()
         with autocast('cuda'):
             output = model(data)
-            loss = criterion(output, label)
+            label_idx = torch.argmax(label, dim=1)
+            loss = criterion(output, label_idx)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         epochLoss += loss.item() * data.size(0)
-        labels = torch.argmax(label, dim=1)
+        labels = label_idx
         outputs = torch.argmax(output, dim=1)
         for i in range(len(labels)):
             if labels[i] == outputs[i]:
@@ -111,9 +167,10 @@ def val(epoch):
             batchCorrectNum = 0
             with autocast('cuda'):
                 output = model(data)
-                loss = criterion(output, label)
+                label_idx = torch.argmax(label, dim=1)
+                loss = criterion(output, label_idx)
             epochLoss += loss.item() * data.size(0)
-            labels = torch.argmax(label, dim=1)
+            labels = label_idx
             outputs = torch.argmax(output, dim=1)
             for i in range(len(labels)):
                 if labels[i] == outputs[i]:
@@ -193,14 +250,32 @@ def save_training_log(run_dir, run_idx, history, bestEpoch, bestAcc, epochs):
 if __name__ == '__main__':
     bestAcc = 0.0
     bestEpoch = 0
+    epochs_no_improve = 0
+
     for epoch in range(1, Train.epochs + 1):
         trainAcc = train(epoch)
         valAcc = val(epoch)
-        if valAcc > bestAcc:
+
+        if valAcc > bestAcc + Train.early_stop_min_delta:
             bestAcc = valAcc
             bestEpoch = epoch
+            epochs_no_improve = 0
             torch.save(model.state_dict(), os.path.join(run_dir, f"best{SF}.pt"))
             print(f">>> 新的最佳模型! Epoch:{epoch} ValAcc:{valAcc:.4f} 已保存")
+        else:
+            epochs_no_improve += 1
+
+        if Train.early_stop_enabled and epochs_no_improve >= Train.early_stop_patience:
+            recent_train_accs = history["train_acc"][-5:] if len(history["train_acc"]) >= 5 else history["train_acc"]
+            train_acc_trend = all(recent_train_accs[i] < recent_train_accs[i+1]
+                                  for i in range(len(recent_train_accs)-1))
+            prev_train_acc = history["train_acc"][-2] if len(history["train_acc"]) >= 2 else 0
+
+            if train_acc_trend and trainAcc > prev_train_acc:
+                print(f"\n早停触发: 验证准确率连续 {epochs_no_improve} 个 epoch 无有效上升，")
+                print(f"         且训练准确率持续上升（过拟合）。")
+                print(f"         当前 trainAcc={trainAcc:.4f}, valAcc={valAcc:.4f}")
+                break
 
     torch.save(model.state_dict(), os.path.join(run_dir, f"last{SF}.pt"))
     print(f"\n训练结束。最佳模型在 Epoch {bestEpoch}, ValAcc={bestAcc:.4f}")

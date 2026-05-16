@@ -122,16 +122,16 @@ def get_backbone_features(dataLoader, model, device, max_samples_per_class=200):
 
 
 def plot_tsne(features, labels, title, save_path, n_samples_limit=None):
-    """?? t-SNE ??????"""
+    """绘制 t-SNE 可视化"""
     if n_samples_limit and len(features) > n_samples_limit:
         indices = np.random.choice(len(features), n_samples_limit, replace=False)
         features = features[indices]
         labels = labels[indices]
 
-    print(f"[{title}] ???? t-SNE ??????: {len(features)}...")
+    print(f"[{title}] 正在进行 t-SNE 降维，样本数: {len(features)}...")
     tsne = TSNE(n_components=2, perplexity=30, random_state=42, max_iter=1000, init='pca')
     coords = tsne.fit_transform(features)
-    print(f"[{title}] t-SNE ??!")
+    print(f"[{title}] t-SNE 完成!")
 
     fig, ax = plt.subplots(figsize=(12, 10), dpi=150)
 
@@ -155,8 +155,8 @@ def plot_tsne(features, labels, title, save_path, n_samples_limit=None):
         )
 
     ax.set_title(title, fontsize=16, fontweight='bold', pad=15, fontproperties=CJK_FONT)
-    ax.set_xlabel("t-SNE ?? 1", fontsize=12, fontproperties=CJK_FONT)
-    ax.set_ylabel("t-SNE ?? 2", fontsize=12, fontproperties=CJK_FONT)
+    ax.set_xlabel("t-SNE 维度 1", fontsize=12, fontproperties=CJK_FONT)
+    ax.set_ylabel("t-SNE 维度 2", fontsize=12, fontproperties=CJK_FONT)
 
     legend = ax.legend(
         loc='lower right',
@@ -178,22 +178,22 @@ def plot_tsne(features, labels, title, save_path, n_samples_limit=None):
     ax.grid(True, alpha=0.3, linestyle='--')
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
-    print(f"???: {save_path}")
+    print(f"已保存: {save_path}")
     plt.close()
     return coords
 
 
 def plot_tsne_advanced(features, labels, title, save_path, n_samples_limit=None):
-    """??? t-SNE ???"""
+    """高级 t-SNE 绘图"""
     if n_samples_limit and len(features) > n_samples_limit:
         indices = np.random.choice(len(features), n_samples_limit, replace=False)
         features = features[indices]
         labels = labels[indices]
 
-    print(f"[{title}] ???? t-SNE ??????: {len(features)}...")
+    print(f"[{title}] 正在进行 t-SNE 降维，样本数: {len(features)}...")
     tsne = TSNE(n_components=2, perplexity=30, random_state=42, max_iter=1000, init='pca')
     coords = tsne.fit_transform(features)
-    print(f"[{title}] t-SNE ??!")
+    print(f"[{title}] t-SNE 完成!")
 
     fig, ax = plt.subplots(figsize=(14, 11), dpi=150)
 
@@ -229,8 +229,8 @@ def plot_tsne_advanced(features, labels, title, save_path, n_samples_limit=None)
         )
 
     ax.set_title(title, fontsize=18, fontweight='bold', pad=20, fontproperties=CJK_FONT)
-    ax.set_xlabel("t-SNE ?? 1", fontsize=13, fontproperties=CJK_FONT)
-    ax.set_ylabel("t-SNE ?? 2", fontsize=13, fontproperties=CJK_FONT)
+    ax.set_xlabel("t-SNE 维度 1", fontsize=13, fontproperties=CJK_FONT)
+    ax.set_ylabel("t-SNE 维度 2", fontsize=13, fontproperties=CJK_FONT)
     ax.grid(True, alpha=0.25, linestyle='--')
 
     legend = ax.legend(
@@ -245,7 +245,7 @@ def plot_tsne_advanced(features, labels, title, save_path, n_samples_limit=None)
         markerscale=1.2,
         borderpad=0.6,
         labelspacing=0.5,
-        title="????",
+        title="类别",
         title_fontsize=11
     )
     if CJK_FONT:
@@ -256,7 +256,7 @@ def plot_tsne_advanced(features, labels, title, save_path, n_samples_limit=None)
     plt.tight_layout()
     plt.subplots_adjust(right=0.80)
     plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
-    print(f"???: {save_path}")
+    print(f"已保存: {save_path}")
     plt.close()
 
 
