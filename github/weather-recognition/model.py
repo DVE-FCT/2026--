@@ -4,8 +4,8 @@ import torchvision.models as models
 from config import Common, Train
 
 # 引入rest50模型
-net = models.resnet50()
-net.load_state_dict(torch.load("./model/resnet50-11ad3fa6.pth"))
+# 直接从官网下载，默认到 ~/.cache/torch/hub/checkpoints/ 目录下 的 resnet50-11ad3fa6.pth
+net = models.resnet50(weights='DEFAULT')
 
 
 class WeatherModel(nn.Module):
