@@ -32,5 +32,21 @@ class Train:
     early_stop_min_delta = 0.005  # 被认为"有效上升"的最小阈值（提升至少 0.5%）
     early_stop_enabled = True    # 是否启用早停
 
+    # Focal Loss 配置
+    focal_loss_gamma = 2.0      # 聚焦参数，γ 越大越关注困难样本
+    focal_loss_alpha_source = "model_1_test"  # alpha 权重来源："model_1_test" 或 "manual"
+    # 基于 model_1 测试集每类准确率计算 alpha（准确率越低权重越高）
+    focal_loss_per_class_acc = {
+        "cloudy":  0.4965,
+        "haze":    0.7831,
+        "rainy":   0.6405,
+        "shine":   0.9500,
+        "snow":    0.7662,
+        "sunny":   0.5821,
+        "sunrise": 1.0000,
+        "thunder": 0.9530,
+    }
+    focal_loss_alpha_eps = 0.01  # 计算 alpha 时的平滑项，避免除零
+
 
 

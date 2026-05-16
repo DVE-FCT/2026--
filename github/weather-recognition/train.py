@@ -90,18 +90,9 @@ print(f"{'='*60}\n")
 model = weatherModel
 model.to(Common.device)
 
-# ---- Focal Loss alpha 权重计算（基于 model_1 测试集每类准确率）----
-per_class_acc = {
-    "cloudy":  0.4965,
-    "haze":    0.7831,
-    "rainy":   0.6405,
-    "shine":   0.9500,
-    "snow":    0.7662,
-    "sunny":   0.5821,
-    "sunrise": 1.0000,
-    "thunder": 0.9530,
-}
-eps = 0.01
+# ---- Focal Loss alpha 权重计算（基于 config 中的每类准确率）----
+per_class_acc = Train.focal_loss_per_class_acc
+eps = Train.focal_loss_alpha_eps
 alpha_list = [1.0 / (per_class_acc[c] + eps) for c in Common.labels]
 alpha_tensor = torch.tensor(alpha_list, dtype=torch.float)
 alpha_tensor = alpha_tensor / alpha_tensor.sum() * len(Common.labels)
@@ -109,7 +100,7 @@ print(f"[Focal Loss] alpha 权重（基于每类准确率）: ")
 for c, a in zip(Common.labels, alpha_tensor.tolist()):
     print(f"  {c:>8s}: {a:.4f}  (准确率 {per_class_acc[c]:.4f})")
 
-criterion = FocalLoss(gamma=2.0, alpha=alpha_tensor)
+criterion = FocalLoss(gamma=Train.focal_loss_gamma, alpha=alpha_tensor)
 optimizer = optim.Adam(model.parameters(), lr=Train.lr)
 scaler = GradScaler('cuda')
 writer = SummaryWriter(log_dir=Train.logDir, flush_secs=500)
