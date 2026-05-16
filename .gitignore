@@ -1,5 +1,6 @@
 # Dataset (entire directory)
 data/
+记录.md
 
 # Python cache
 __pycache__/
