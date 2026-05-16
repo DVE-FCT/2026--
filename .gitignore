@@ -1,6 +1,8 @@
 # Dataset (entire directory)
 data/
-记录.md
+
+# 记录资源（忽略图片目录，但跟踪主文件）
+记录.assets/
 
 # Python cache
 __pycache__/
