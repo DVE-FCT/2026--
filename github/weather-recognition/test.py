@@ -108,6 +108,9 @@ def test():
     print('========== Classification Report ==========')
     print(classification_report(all_labels, all_preds, target_names=labels_list, zero_division=0))
 
+    # ========== 混淆矩阵数值（先计算，再写入 txt）==========
+    cm = confusion_matrix(all_labels, all_preds)
+
     # ========== 保存完整测试结果到 txt ==========
     result_path = os.path.join(run_dir, f"test_result{SF}.txt")
     with open(result_path, 'w', encoding='utf-8') as f:
@@ -141,6 +144,20 @@ def test():
 
         f.write("========== Classification Report ==========\n")
         f.write(classification_report(all_labels, all_preds, target_names=labels_list, zero_division=0))
+
+        f.write("\n========== Confusion Matrix ==========\n")
+        col_labels = "True\\Pred"
+        f.write(f"{col_labels:<12}")
+        for name in labels_list:
+            f.write(f"{name:<12}")
+        f.write("\n")
+        f.write("\n")
+        for i, row in enumerate(cm):
+            f.write(f"{labels_list[i]:<12}")
+            for val in row:
+                f.write(f"{val:<12}")
+            f.write("\n")
+        f.write("\n矩阵数值说明：行=真实类别，列=预测类别，对角线=正确数\n")
     print(f"测试结果已保存至: {result_path}")
 
     # ========== 绘制混淆矩阵 ==========

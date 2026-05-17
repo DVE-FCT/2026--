@@ -1,8 +1,13 @@
 # Dataset (entire directory)
 data/
 
-# 记录资源（忽略图片目录，但跟踪主文件）
+# 记录资源
 记录.assets/
+# 忽略记录主文件
+记录.md
+
+# Zip archives
+*.zip
 
 # Python cache
 __pycache__/
