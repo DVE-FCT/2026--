@@ -31,9 +31,9 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, inputs, targets):
-        p = F.softmax(inputs, dim=1)
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-        pt = p.gather(1, targets.unsqueeze(1)).squeeze(1)
+        log_probs = F.log_softmax(inputs, dim=1)
+        ce_loss = F.nll_loss(log_probs, targets, reduction='none')
+        pt = torch.exp(log_probs.gather(1, targets.unsqueeze(1)).squeeze(1))
         focal_weight = (1 - pt) ** self.gamma
         loss = focal_weight * ce_loss
 
