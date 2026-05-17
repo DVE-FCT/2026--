@@ -28,12 +28,12 @@ class Train:
     modelDir = "./model/" # 模型存放位置
 
     # 早停机制配置
-    early_stop_patience = 15   # 验证准确率无有效上升的最大 epochs 数
+    early_stop_patience = 10   # 验证准确率无有效上升的最大 epochs 数
     early_stop_min_delta = 0.005  # 被认为"有效上升"的最小阈值（提升至少 0.5%）
     early_stop_enabled = True    # 是否启用早停
 
     # Focal Loss 配置
-    focal_loss_gamma = 2.0      # 聚焦参数，γ 越大越关注困难样本
+    focal_loss_gamma = 0.5      # 聚焦参数，γ 越大越关注困难样本
     focal_loss_alpha_source = "model_1_test"  # alpha 权重来源："model_1_test" 或 "manual"
     # 基于 model_1 测试集每类准确率计算 alpha（准确率越低权重越高）
     focal_loss_per_class_acc = {
