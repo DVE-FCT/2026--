@@ -193,14 +193,32 @@ def save_training_log(run_dir, run_idx, history, bestEpoch, bestAcc, epochs):
 if __name__ == '__main__':
     bestAcc = 0.0
     bestEpoch = 0
+    epochs_no_improve = 0
+
     for epoch in range(1, Train.epochs + 1):
         trainAcc = train(epoch)
         valAcc = val(epoch)
-        if valAcc > bestAcc:
+
+        if valAcc > bestAcc + Train.early_stop_min_delta:
             bestAcc = valAcc
             bestEpoch = epoch
+            epochs_no_improve = 0
             torch.save(model.state_dict(), os.path.join(run_dir, f"best{SF}.pt"))
             print(f">>> 新的最佳模型! Epoch:{epoch} ValAcc:{valAcc:.4f} 已保存")
+        else:
+            epochs_no_improve += 1
+
+        if Train.early_stop_enabled and epochs_no_improve >= Train.early_stop_patience:
+            recent_train_accs = history["train_acc"][-5:] if len(history["train_acc"]) >= 5 else history["train_acc"]
+            train_acc_trend = all(recent_train_accs[i] < recent_train_accs[i+1]
+                                  for i in range(len(recent_train_accs)-1))
+            prev_train_acc = history["train_acc"][-2] if len(history["train_acc"]) >= 2 else 0
+
+            if train_acc_trend and trainAcc > prev_train_acc:
+                print(f"\n早停触发: 验证准确率连续 {epochs_no_improve} 个 epoch 无有效上升，")
+                print(f"         且训练准确率持续上升（过拟合）。")
+                print(f"         当前 trainAcc={trainAcc:.4f}, valAcc={valAcc:.4f}")
+                break
 
     torch.save(model.state_dict(), os.path.join(run_dir, f"last{SF}.pt"))
     print(f"\n训练结束。最佳模型在 Epoch {bestEpoch}, ValAcc={bestAcc:.4f}")
