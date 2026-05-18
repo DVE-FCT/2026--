@@ -30,10 +30,10 @@ class Train:
     # 早停机制配置
     early_stop_patience = 15   # 验证准确率无有效上升的最大 epochs 数
     early_stop_min_delta = 0.005  # 被认为"有效上升"的最小阈值（提升至少 0.5%）
-    early_stop_enabled = True    # 是否启用早停
+    early_stop_enabled = False    # 是否启用早停
 
     # 数据增强与分层采样控制
-    data_augmentation_enabled = True   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）
+    data_augmentation_enabled = False   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）
     stratified_split_enabled = True    # 是否启用分层划分（70/15/15），False 则随机划分
 
 
