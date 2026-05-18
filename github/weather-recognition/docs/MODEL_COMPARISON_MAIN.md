@@ -15,7 +15,30 @@
 
 ---
 
-## 2. 总体指标对比
+## 2. 训练配置参数说明
+
+所有可通过 `config.py` 配置的关键参数：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `early_stop_patience` | 15 | 验证准确率无有效上升的最大 epochs 数 |
+| `early_stop_min_delta` | 0.005 | 被认为"有效上升"的最小阈值（提升至少 0.5%） |
+| `early_stop_enabled` | True | 是否启用早停 |
+| `data_augmentation_enabled` | True | 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter） |
+| `stratified_split_enabled` | True | 是否启用分层划分（70/15/15），False 则随机划分 |
+
+**数据增强参数说明：**
+- `RandomResizedCrop(224, scale=(0.7, 1.0))` — 随机裁剪到 224x224，保留原图 70%~100% 区域
+- `RandomHorizontalFlip()` — 随机水平翻转
+- `ColorJitter(brightness=0.25, contrast=0.25, saturation=0.2, hue=0.03)` — 颜色抖动
+
+**分层划分逻辑：**
+- 每类按 70/15/15 比例分配到训练/验证/测试集
+- 保证测试集中各类别分布均衡
+
+---
+
+## 3. 总体指标对比
 
 | 指标 | Model 1（基线） | Model 9（结构修复） | Model 10（增强+分层） | 变化（9→10） |
 |------|---------------|-------------------|---------------------|-------------|
@@ -32,7 +55,7 @@
 
 ---
 
-## 3. 逐类 F1 对比
+## 4. 逐类 F1 对比
 
 | 类别 | Model 1 F1 | Model 9 F1 | Model 10 F1 | 9→10 变化 |
 |------|-----------|-----------|-----------|---------|
@@ -52,7 +75,7 @@
 
 ---
 
-## 4. 训练稳定性分析
+## 5. 训练稳定性分析
 
 ### 4.1 收敛速度对比
 
@@ -85,7 +108,7 @@
 
 ---
 
-## 5. 关键发现
+## 6. 关键发现
 
 ### 5.1 结构修复效果（Model 1 → Model 9）
 
@@ -113,7 +136,7 @@
 
 ---
 
-## 6. 结论与建议
+## 7. 结论与建议
 
 ### 6.1 对比结论
 
@@ -138,7 +161,7 @@
 
 ---
 
-## 7. 各模型完整输出文件
+## 8. 各模型完整输出文件
 
 - [Model 1 指标](github/weather-recognition/model/model_1/test_result_model_1.txt)
 - [Model 9 训练日志](github/weather-recognition/model/model_9/training_log_model_9.txt)
