@@ -61,8 +61,27 @@ writer = SummaryWriter(log_dir=Train.logDir, flush_secs=500)
 
 history = {
     "train_loss": [], "train_acc": [],
-    "val_loss": [],   "val_acc": []
+    "val_loss": [],   "val_acc": [],
+    "lr": []
 }
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=Train.lr)
+
+# ---- 学习率调度 ----
+if Train.lr_scheduler == "CosineAnnealing":
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=Train.epochs,
+        eta_min=Train.lr_min if hasattr(Train, 'lr_min') else 1e-6
+    )
+    print(f"[学习率调度] 策略: CosineAnnealingLR, 初始={Train.lr}, 最终={Train.lr_min}")
+else:
+    scheduler = None
+    print(f"[学习率调度] 策略: 固定学习率 ({Train.lr})")
+
+scaler = GradScaler('cuda')
+writer = SummaryWriter(log_dir=Train.logDir, flush_secs=500)
 
 
 def train(epoch):
@@ -88,15 +107,19 @@ def train(epoch):
                 correctNum += 1
                 batchCorrectNum += 1
         batchAcc = batchCorrectNum / data.size(0)
-        pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{batchAcc:.4f}"})
+        current_lr = optimizer.param_groups[0]['lr']
+        pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{batchAcc:.4f}", "lr": f"{current_lr:.2e}"})
 
     epochLoss = epochLoss / len(trainLoader.dataset)
     epochAcc = correctNum / len(trainLoader.dataset)
-    print(f"Epoch:{epoch}\t Train Loss:{epochLoss:.4f} \t Train Acc:{epochAcc:.4f}")
+    current_lr = optimizer.param_groups[0]['lr']
+    print(f"Epoch:{epoch}\t Train Loss:{epochLoss:.4f} \t Train Acc:{epochAcc:.4f}\t LR:{current_lr:.2e}")
     writer.add_scalar("train_loss", epochLoss, epoch)
     writer.add_scalar("train_acc", epochAcc, epoch)
+    writer.add_scalar("lr", current_lr, epoch)
     history["train_loss"].append(epochLoss)
     history["train_acc"].append(epochAcc)
+    history["lr"].append(current_lr)
     return epochAcc
 
 
@@ -120,11 +143,13 @@ def val(epoch):
                     correctNum += 1
                     batchCorrectNum += 1
             batchAcc = batchCorrectNum / data.size(0)
-            pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{batchAcc:.4f}"})
+            current_lr = optimizer.param_groups[0]['lr']
+            pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{batchAcc:.4f}", "lr": f"{current_lr:.2e}"})
 
         epochLoss = epochLoss / len(valLoader.dataset)
         epochAcc = correctNum / len(valLoader.dataset)
-        print(f"Epoch:{epoch}\t Val   Loss:{epochLoss:.4f} \t Val   Acc:{epochAcc:.4f}")
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Epoch:{epoch}\t Val   Loss:{epochLoss:.4f} \t Val   Acc:{epochAcc:.4f}\t LR:{current_lr:.2e}")
         writer.add_scalar("val_loss", epochLoss, epoch)
         writer.add_scalar("val_acc", epochAcc, epoch)
     history["val_loss"].append(epochLoss)
@@ -176,18 +201,23 @@ def save_training_log(run_dir, run_idx, history, bestEpoch, bestAcc, epochs):
         if Train.early_stop_enabled:
             f.write(f"  early_stop_patience : {Train.early_stop_patience}\n")
             f.write(f"  early_stop_min_delta: {Train.early_stop_min_delta}\n")
+        f.write(f"  lr_scheduler   : {Train.lr_scheduler if hasattr(Train, 'lr_scheduler') else 'None'}\n")
+        if hasattr(Train, 'lr_scheduler') and Train.lr_scheduler == "CosineAnnealing":
+            f.write(f"  lr_min         : {Train.lr_min}\n")
         f.write(f"  data_augmentation: {'启用' if Train.data_augmentation_enabled else '禁用'}\n")
         f.write(f"  stratified_split : {'启用' if Train.stratified_split_enabled else '禁用'}\n\n")
         f.write(f"--- 训练结果 ---\n")
         f.write(f"  最佳 epoch     : {bestEpoch}/{epochs}\n")
         f.write(f"  最佳验证准确率  : {bestAcc:.4f}\n\n")
         f.write(f"--- 指标变化 ---\n")
-        f.write(f"{'Epoch':<8} {'Train Loss':<12} {'Train Acc':<12} {'Val Loss':<12} {'Val Acc':<12}\n")
+        f.write(f"{'Epoch':<8} {'Train Loss':<12} {'Train Acc':<12} {'Val Loss':<12} {'Val Acc':<12} {'LR':<12}\n")
         for i in range(len(history["train_loss"])):
+            lr_val = history["lr"][i] if i < len(history["lr"]) else Train.lr
             f.write(f"{i+1:<8} {history['train_loss'][i]:<12.4f} "
                     f"{history['train_acc'][i]:<12.4f} "
                     f"{history['val_loss'][i]:<12.4f} "
-                    f"{history['val_acc'][i]:<12.4f}\n")
+                    f"{history['val_acc'][i]:<12.4f} "
+                    f"{lr_val:<12.6f}\n")
         f.write(f"\n--- 完整路径 ---\n")
         f.write(f"  best.pt            : {run_dir}/best{SF}.pt\n")
         f.write(f"  last.pt            : {run_dir}/last{SF}.pt\n")
@@ -204,6 +234,12 @@ if __name__ == '__main__':
     for epoch in range(1, Train.epochs + 1):
         trainAcc = train(epoch)
         valAcc = val(epoch)
+
+        # 更新学习率（CosineAnnealing）
+        if scheduler is not None:
+            scheduler.step()
+            current_lr = optimizer.param_groups[0]['lr']
+            writer.add_scalar("lr", current_lr, epoch)
 
         if valAcc > bestAcc + Train.early_stop_min_delta:
             bestAcc = valAcc
