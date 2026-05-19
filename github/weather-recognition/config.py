@@ -53,8 +53,8 @@ class Train:
     focal_loss_alpha_eps = 0.01  # 计算 alpha 时的平滑项，避免除零
 
     # 数据增强与分层采样控制
-    data_augmentation_enabled = False   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）
-    stratified_split_enabled = True    # 是否启用分层划分（70/15/15），False 则随机划分
+    data_augmentation_enabled = True   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）
+    stratified_split_enabled = False    # 是否启用分层划分（70/15/15），False 则随机划分
 
 
 

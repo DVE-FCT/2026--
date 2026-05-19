@@ -245,7 +245,9 @@ def save_training_log(run_dir, run_idx, history, bestEpoch, bestAcc, epochs):
         if Train.early_stop_enabled:
             f.write(f"  early_stop_patience: {Train.early_stop_patience}\n")
             f.write(f"  early_stop_min_delta: {Train.early_stop_min_delta}\n")
-        f.write(f"  alpha来源        : {Train.focal_loss_alpha_source}\n\n")
+        f.write(f"  alpha来源        : {Train.focal_loss_alpha_source}\n")
+        f.write(f"  data_augmentation: {'启用' if Train.data_augmentation_enabled else '禁用'}\n")
+        f.write(f"  stratified_split  : {'启用' if Train.stratified_split_enabled else '禁用'}\n\n")
         f.write(f"--- 训练结果 ---\n")
         f.write(f"  最佳 epoch     : {bestEpoch}/{epochs}\n")
         f.write(f"  最佳验证准确率  : {bestAcc:.4f}\n\n")
