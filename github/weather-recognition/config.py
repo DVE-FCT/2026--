@@ -38,23 +38,23 @@ class Train:
 
     # Focal Loss 配置
     focal_loss_gamma = 1.0      # 聚焦参数，γ 越大越关注困难样本
-    focal_loss_alpha_source = "model_1_test"  # alpha 权重来源："model_1_test" 或 "manual"
-    # 基于 model_1 测试集每类准确率计算 alpha（准确率越低权重越高）
+    focal_loss_alpha_source = "model_10_test"  # alpha 权重来源："model_10_test" 或 "manual"
+    # 基于 model_10 测试集每类准确率计算 alpha（准确率越低权重越高）
     focal_loss_per_class_acc = {
-        "cloudy":  0.4965,
-        "haze":    0.7831,
-        "rainy":   0.6405,
-        "shine":   0.9500,
-        "snow":    0.7662,
-        "sunny":   0.5821,
-        "sunrise": 1.0000,
-        "thunder": 0.9530,
+        "cloudy":  0.5867,
+        "haze":    0.8133,
+        "rainy":   0.8333,
+        "shine":   0.9487,
+        "snow":    0.8533,
+        "sunny":   0.7200,
+        "sunrise": 0.9630,
+        "thunder": 0.9667,
     }
     focal_loss_alpha_eps = 0.01  # 计算 alpha 时的平滑项，避免除零
 
     # 数据增强与分层采样控制
     data_augmentation_enabled = True   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）
-    stratified_split_enabled = False    # 是否启用分层划分（70/15/15），False 则随机划分
+    stratified_split_enabled = True    # 是否启用分层划分（70/15/15），False 则随机划分
 
 
 
