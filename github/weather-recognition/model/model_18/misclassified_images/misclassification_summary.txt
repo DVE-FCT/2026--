@@ -1,0 +1,35 @@
+错分图片保存汇总
+==================================================
+
+每对保存上限：30 张
+
+==================================================
+类别对                            错分数        已保存       
+--------------------------------------------------
+cloudy -> haze                 21         21        
+cloudy -> rainy                24         24        
+cloudy -> snow                 1          1         
+cloudy -> sunny                10         10        
+haze -> cloudy               15         15        
+haze -> sunny                4          4         
+haze -> snow                 2          2         
+haze -> rainy                2          2         
+haze -> thunder              1          1         
+rainy -> snow                 4          4         
+rainy -> haze                 8          8         
+rainy -> cloudy               14         14        
+rainy -> sunny                3          3         
+snow -> rainy                9          9         
+snow -> cloudy               2          2         
+snow -> haze                 5          5         
+snow -> sunny                2          2         
+snow -> thunder              3          3         
+snow -> sunrise              1          1         
+sunny -> cloudy               18         18        
+sunny -> snow                 4          4         
+sunny -> haze                 6          6         
+sunny -> rainy                2          2         
+sunny -> sunrise              2          2         
+sunrise -> haze                 2          2         
+thunder -> rainy                1          1         
+thunder -> haze                 2          2         

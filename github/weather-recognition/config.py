@@ -40,5 +40,9 @@ class Train:
     data_augmentation_enabled = True    # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）
     stratified_split_enabled = True   # 是否启用分层划分（70/15/15），False 则随机划分
 
+    # 错分图片保存配置
+    save_misclassified_images = True    # 是否保存错分图片
+    misclassified_per_pair_limit = 30   # 每个错分类别对最多保存的图片数量
+
 
 
