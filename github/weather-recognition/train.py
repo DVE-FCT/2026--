@@ -252,13 +252,13 @@ if __name__ == '__main__':
 
         if Train.early_stop_enabled and epochs_no_improve >= Train.early_stop_patience:
             recent_train_accs = history["train_acc"][-5:] if len(history["train_acc"]) >= 5 else history["train_acc"]
-            train_acc_trend = all(recent_train_accs[i] < recent_train_accs[i+1]
+            train_acc_trend = all(recent_train_accs[i] <= recent_train_accs[i+1] + 0.002
                                   for i in range(len(recent_train_accs)-1))
-            prev_train_acc = history["train_acc"][-2] if len(history["train_acc"]) >= 2 else 0
 
-            if train_acc_trend and trainAcc > prev_train_acc:
+            # 训练准确率 > 0.95 时视为饱和，不再要求持续上升
+            if train_acc_trend or trainAcc > 0.95:
                 print(f"\n早停触发: 验证准确率连续 {epochs_no_improve} 个 epoch 无有效上升，")
-                print(f"         且训练准确率持续上升（过拟合）。")
+                print(f"         且训练准确率持续上升（过拟合）或已饱和（>{0.95}）。")
                 print(f"         当前 trainAcc={trainAcc:.4f}, valAcc={valAcc:.4f}")
                 break
 
