@@ -6,6 +6,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+import numpy as np
+from scipy.stats import spearmanr
+
+# 设置中文字体
+FONT_PATH = r"C:\Windows\Fonts\simhei.ttf"
+try:
+    fm.fontManager.addfont(FONT_PATH)
+    plt.rcParams['font.sans-serif'] = ['SimHei']
+except Exception:
+    plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'Arial']
+plt.rcParams['axes.unicode_minus'] = False
 from torch.utils.tensorboard import SummaryWriter
 from torch.amp import GradScaler, autocast
 from tqdm import tqdm
@@ -14,6 +26,11 @@ from model import model as weatherModel
 from torch import optim
 
 MODEL_ROOT = "./model"
+
+# 类别颜色与标记（统一视觉风格）
+CLASS_COLORS = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3", "#CCB974", "#64B5CD", "#E09F2B"]
+CLASS_MARKERS = ["o", "s", "^", "D", "v", "p", "*", "h"]
+CLASS_LINESTYLES = ["-", "--", "-.", ":", "-", "--", "-.", ":"]
 
 
 # ============================================================
@@ -46,6 +63,12 @@ class FocalLoss(nn.Module):
         elif self.reduction == 'sum':
             return loss.sum()
         return loss
+
+
+def update_alpha_tensor(alpha_list):
+    """将 alpha list 转为归一化的 tensor"""
+    t = torch.tensor(alpha_list, dtype=torch.float)
+    return t / t.sum() * len(Common.labels)
 
 
 def get_next_model_index():
@@ -145,6 +168,88 @@ def val_epoch(epoch, model, val_loader, criterion, optimizer, writer, history):
     return epoch_acc
 
 
+def compute_per_class_val_acc(model, val_loader):
+    """计算验证集每类的准确率，返回 dict"""
+    model.eval()
+    class_correct = {c: 0 for c in Common.labels}
+    class_total = {c: 0 for c in Common.labels}
+
+    with torch.no_grad():
+        for data, label in val_loader:
+            data = data.to(Common.device)
+            label_idx = torch.argmax(label, dim=1)
+            with autocast('cuda'):
+                output = model(data)
+            preds = torch.argmax(output, dim=1).cpu().numpy()
+            labels_np = label_idx.cpu().numpy()
+
+            for p, l in zip(preds, labels_np):
+                class_name = Common.labels[l]
+                class_total[class_name] += 1
+                if p == l:
+                    class_correct[class_name] += 1
+
+    per_class_acc = {}
+    for c in Common.labels:
+        per_class_acc[c] = class_correct[c] / class_total[c] if class_total[c] > 0 else 0.0
+    return per_class_acc
+
+
+def plot_alpha_spearman(alpha_history, spearman_history, alpha_source, save_path):
+    """绘制 alpha 权重演化图和 Spearman ρ 检验图（1×2）"""
+    update_epochs = sorted(alpha_history.keys())
+    labels = Common.labels
+    n_classes = len(labels)
+
+    # 初始 alpha
+    initial_alphas = alpha_history[0]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7), dpi=150)
+
+    # ---- 左图：Spearman ρ 随 epoch 变化 ----
+    if spearman_history:
+        spearman_epochs = sorted(spearman_history.keys())
+        rho_values = [spearman_history[e] for e in spearman_epochs]
+        ax1.plot(spearman_epochs, rho_values, 'o-', color='#2C7BB6', linewidth=2,
+                 markersize=8, markerfacecolor='white', markeredgewidth=2,
+                 label='Spearman $\\rho$')
+        ax1.axhline(y=1.0, color='#D7191C', linestyle='--', linewidth=1, alpha=0.5, label='$\\rho=1$ (理想)')
+        ax1.fill_between(spearman_epochs, 0, rho_values, alpha=0.15, color='#2C7BB6')
+        ax1.set_ylim(-0.1, 1.15)
+    ax1.set_xlabel('Epoch', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('Spearman $\\rho$', fontsize=12, fontweight='bold')
+    ax1.set_title('Alpha-Difficulty Spearman $\\rho$', fontsize=14, fontweight='bold')
+    ax1.legend(fontsize=10, loc='lower right', framealpha=0.9)
+    ax1.grid(True, alpha=0.3, linestyle='--')
+
+    # ---- 右图：Alpha 权重演化 ----
+    for i, c in enumerate(labels):
+        values = [alpha_history[e][i] for e in update_epochs]
+        color = CLASS_COLORS[i]
+        marker = CLASS_MARKERS[i]
+        ls = CLASS_LINESTYLES[i]
+        ax2.plot(update_epochs, values, color=color, linestyle=ls, linewidth=1.8,
+                 marker=marker, markersize=6, markerfacecolor='white', markeredgewidth=1.5,
+                 label=f'{c}', markevery=max(1, len(update_epochs) // 10))
+
+    ax2.axhline(y=1.0, color='gray', linestyle='-', linewidth=0.8, alpha=0.4, label='$\\alpha=1$ (uniform)')
+    ax2.set_xlabel('Epoch', fontsize=12, fontweight='bold')
+    ax2.set_ylabel('Alpha Weight', fontsize=12, fontweight='bold')
+    ax2.set_title(f'Focal Loss Alpha Evolution ({alpha_source})', fontsize=14, fontweight='bold')
+    ax2.grid(True, alpha=0.3, linestyle='--')
+
+    # 图例放在右侧框外，避免遮挡曲线
+    ax2.legend(fontsize=9, loc='center left', bbox_to_anchor=(1.02, 0.5),
+               framealpha=0.9, edgecolor='gray', ncol=1, borderpad=0.6, labelspacing=0.3)
+
+    fig.suptitle('Focal Loss Alpha 动态调整与 Spearman 检验', fontsize=16, fontweight='bold', y=1.01)
+    plt.tight_layout()
+    plt.subplots_adjust(right=0.88, top=0.92)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    print(f"Alpha/Spearman 演化图已保存至: {save_path}")
+    plt.close()
+
+
 def plot_history(history, save_path):
     """绘制训练曲线"""
     epochs = range(1, len(history["train_loss"]) + 1)
@@ -172,7 +277,8 @@ def plot_history(history, save_path):
     plt.close()
 
 
-def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epochs):
+def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epochs,
+                      alpha_history=None, spearman_history=None):
     """保存训练信息到 txt 文件"""
     log_path = os.path.join(run_dir, f"training_log{sf}.txt")
     with open(log_path, 'w', encoding='utf-8') as f:
@@ -182,25 +288,42 @@ def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epoch
         f.write(f"训练时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}\n")
         f.write(f"模型目录: {run_dir}\n\n")
         f.write(f"--- 训练配置 ---\n")
-        f.write(f"  epochs         : {epochs}\n")
-        f.write(f"  batch_size     : {Train.batch_size}\n")
-        f.write(f"  learning_rate   : {Train.lr}\n")
-        f.write(f"  device          : {Common.device}\n")
-        f.write(f"  loss_function   : FocalLoss (gamma={Train.focal_loss_gamma})\n")
-        f.write(f"  alpha来源        : {Train.focal_loss_alpha_source}\n")
-        f.write(f"  lr_scheduler    : {Train.lr_scheduler if hasattr(Train, 'lr_scheduler') else 'None'}\n")
+        f.write(f"  epochs              : {epochs}\n")
+        f.write(f"  batch_size          : {Train.batch_size}\n")
+        f.write(f"  learning_rate        : {Train.lr}\n")
+        f.write(f"  device               : {Common.device}\n")
+        f.write(f"  loss_function        : FocalLoss (gamma={Train.focal_loss_gamma})\n")
+        f.write(f"  alpha来源             : {Train.focal_loss_alpha_source}\n")
+        if hasattr(Train, 'dynamic_alpha_enabled') and Train.dynamic_alpha_enabled:
+            interval = Train.dynamic_alpha_interval if hasattr(Train, 'dynamic_alpha_interval') else 5
+            f.write(f"  alpha动态更新          : 启用（每 {interval} epoch）\n")
+        else:
+            f.write(f"  alpha动态更新          : 禁用\n")
+        f.write(f"  lr_scheduler         : {Train.lr_scheduler if hasattr(Train, 'lr_scheduler') else 'None'}\n")
         if hasattr(Train, 'lr_scheduler') and Train.lr_scheduler == "CosineAnnealing":
-            f.write(f"  lr_min          : {Train.lr_min}\n")
-        f.write(f"  early_stop      : {'启用' if Train.early_stop_enabled else '禁用'}\n")
+            f.write(f"  lr_min               : {Train.lr_min}\n")
+        f.write(f"  early_stop           : {'启用' if Train.early_stop_enabled else '禁用'}\n")
         if Train.early_stop_enabled:
-            f.write(f"  early_stop_patience : {Train.early_stop_patience}\n")
-            f.write(f"  early_stop_min_delta: {Train.early_stop_min_delta}\n")
-        f.write(f"  data_augmentation: {'启用' if Train.data_augmentation_enabled else '禁用'}\n")
-        f.write(f"  stratified_split : {'启用' if Train.stratified_split_enabled else '禁用'}\n\n")
+            f.write(f"  early_stop_patience   : {Train.early_stop_patience}\n")
+            f.write(f"  early_stop_min_delta  : {Train.early_stop_min_delta}\n")
+        f.write(f"  data_augmentation    : {'启用' if Train.data_augmentation_enabled else '禁用'}\n")
+        f.write(f"  stratified_split     : {'启用' if Train.stratified_split_enabled else '禁用'}\n\n")
         f.write(f"--- 训练结果 ---\n")
-        f.write(f"  最佳 epoch     : {best_epoch}/{epochs}\n")
-        f.write(f"  最佳验证准确率  : {best_acc:.4f}\n\n")
-        f.write(f"--- 指标变化 ---\n")
+        f.write(f"  最佳 epoch           : {best_epoch}/{epochs}\n")
+        f.write(f"  最佳验证准确率         : {best_acc:.4f}\n\n")
+
+        # Alpha 动态更新记录
+        if alpha_history:
+            f.write(f"--- Alpha 动态更新记录 ---\n")
+            update_epochs = sorted(alpha_history.keys())
+            f.write(f"{'Epoch':<8} " + " ".join([f"{c:>8}" for c in Common.labels]) + "   Spearman ρ\n")
+            f.write("-" * (16 + 9 * 8 + 12) + "\n")
+            for e in update_epochs:
+                alphas = alpha_history[e]
+                rho_str = f"  {spearman_history.get(e, 0):.4f}" if spearman_history else ""
+                f.write(f"{e:<8} " + " ".join([f"{v:>8.4f}" for v in alphas]) + f"{rho_str}\n")
+
+        f.write(f"\n--- 指标变化 ---\n")
         f.write(f"{'Epoch':<8} {'Train Loss':<12} {'Train Acc':<12} {'Val Loss':<12} {'Val Acc':<12} {'LR':<12}\n")
         for i in range(len(history["train_loss"])):
             lr_val = history["lr"][i] if i < len(history["lr"]) else Train.lr
@@ -210,10 +333,12 @@ def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epoch
                     f"{history['val_acc'][i]:<12.4f} "
                     f"{lr_val:<12.6f}\n")
         f.write(f"\n--- 完整路径 ---\n")
-        f.write(f"  best.pt            : {run_dir}/best{sf}.pt\n")
-        f.write(f"  last.pt            : {run_dir}/last{sf}.pt\n")
-        f.write(f"  训练曲线          : {run_dir}/training_history{sf}.png\n")
-        f.write(f"  tensorboard log    : {Train.logDir}\n")
+        f.write(f"  best.pt                 : {run_dir}/best{sf}.pt\n")
+        f.write(f"  last.pt                 : {run_dir}/last{sf}.pt\n")
+        f.write(f"  训练曲线                : {run_dir}/training_history{sf}.png\n")
+        if alpha_history:
+            f.write(f"  Alpha/Spearman 演化图    : {run_dir}/alpha_spearman{sf}.png\n")
+        f.write(f"  tensorboard log         : {Train.logDir}\n")
     print(f"训练日志已保存至: {log_path}")
 
 
@@ -233,17 +358,34 @@ def main():
     model = weatherModel
     model.to(Common.device)
 
-    # ---- Focal Loss alpha 权重（基于 config 中的每类准确率）----
-    per_class_acc = Train.focal_loss_per_class_acc
+    # ---- 初始 alpha 权重 ----
+    dynamic_alpha = hasattr(Train, 'dynamic_alpha_enabled') and Train.dynamic_alpha_enabled
     eps = Train.focal_loss_alpha_eps
-    alpha_list = [1.0 / (per_class_acc[c] + eps) for c in Common.labels]
-    alpha_tensor = torch.tensor(alpha_list, dtype=torch.float)
-    alpha_tensor = alpha_tensor / alpha_tensor.sum() * len(Common.labels)
-    print(f"[Focal Loss] alpha 权重来源: {Train.focal_loss_alpha_source}")
-    for c, a in zip(Common.labels, alpha_tensor.tolist()):
-        print(f"  {c:>8s}: {a:.4f}  (准确率 {per_class_acc[c]:.4f})")
+    alpha_source_label = Train.focal_loss_alpha_source
+    alpha_update_interval = Train.dynamic_alpha_interval if hasattr(Train, 'dynamic_alpha_interval') else 5
 
+    if dynamic_alpha:
+        print(f"[Focal Loss] 动态 alpha 模式（每 {alpha_update_interval} epoch 更新，基于验证集 per-class acc）")
+        per_class_acc_init = Train.focal_loss_per_class_acc
+        initial_alphas = [1.0 / (per_class_acc_init[c] + eps) for c in Common.labels]
+        print(f"[Focal Loss] 初始 alpha 来源: {alpha_source_label}，之后动态调整")
+        for c, a in zip(Common.labels, initial_alphas):
+            print(f"  {c:>8s}: {a:.4f}  (准确率 {per_class_acc_init[c]:.4f})")
+    else:
+        per_class_acc_init = Train.focal_loss_per_class_acc
+        initial_alphas = [1.0 / (per_class_acc_init[c] + eps) for c in Common.labels]
+        print(f"[Focal Loss] alpha 权重来源: {alpha_source_label}")
+        for c, a in zip(Common.labels, initial_alphas):
+            print(f"  {c:>8s}: {a:.4f}  (准确率 {per_class_acc_init[c]:.4f})")
+
+    alpha_tensor = update_alpha_tensor(initial_alphas)
     criterion = FocalLoss(gamma=Train.focal_loss_gamma, alpha=alpha_tensor)
+
+    # ---- 记录 alpha 和 Spearman 历史 ----
+    alpha_history = {}  # {epoch: [alpha_0, alpha_1, ...]}
+    spearman_history = {}  # {epoch: rho}
+    alpha_history[0] = initial_alphas.copy()
+
     optimizer = optim.Adam(model.parameters(), lr=Train.lr)
 
     # ---- 学习率调度 ----
@@ -281,6 +423,27 @@ def main():
             current_lr = optimizer.param_groups[0]['lr']
             writer.add_scalar("lr", current_lr, epoch)
 
+        # ---- 动态更新 alpha 权重 ----
+        if dynamic_alpha and epoch % alpha_update_interval == 0:
+            per_class_acc = compute_per_class_val_acc(model, valLoader)
+            difficulty = [1.0 - per_class_acc[c] for c in Common.labels]
+            new_alphas = [d / (sum(difficulty) + 1e-8) * len(Common.labels) for d in difficulty]
+            alpha_history[epoch] = new_alphas
+
+            # 更新 criterion 中的 alpha
+            criterion.alpha = update_alpha_tensor(new_alphas).to(Common.device)
+
+            # 计算 Spearman ρ：alpha 权重 vs 类别难度
+            rho, _ = spearmanr(new_alphas, difficulty)
+            spearman_history[epoch] = rho
+
+            # 打印
+            print(f"\n  [Alpha 更新] epoch {epoch}:")
+            print(f"  {'类别':<10} {'准确率':>8} {'难度':>8} {'alpha':>8}")
+            for i, c in enumerate(Common.labels):
+                print(f"  {c:<10} {per_class_acc[c]:>8.4f} {difficulty[i]:>8.4f} {new_alphas[i]:>8.4f}")
+            print(f"  Spearman ρ = {rho:.4f}\n")
+
         if val_acc > best_acc + Train.early_stop_min_delta:
             best_acc = val_acc
             best_epoch = epoch
@@ -301,11 +464,23 @@ def main():
                 print(f"         当前 trainAcc={train_acc:.4f}, valAcc={val_acc:.4f}")
                 break
 
+    # 保存 final alpha（如果还没记录）
+    if epoch not in alpha_history:
+        final_alphas = criterion.alpha.cpu().tolist() if criterion.alpha is not None else [1.0] * 8
+        alpha_history[epoch] = final_alphas
+
     torch.save(model.state_dict(), os.path.join(run_dir, f"last{sf}.pt"))
     print(f"\n训练结束。最佳模型在 Epoch {best_epoch}, ValAcc={best_acc:.4f}")
 
+    # 绘制
     plot_history(history, save_path=os.path.join(run_dir, f"training_history{sf}.png"))
-    save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, Train.epochs)
+    if dynamic_alpha and len(spearman_history) > 0:
+        plot_alpha_spearman(alpha_history, spearman_history, alpha_source_label,
+                            save_path=os.path.join(run_dir, f"alpha_spearman{sf}.png"))
+
+    save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, Train.epochs,
+                      alpha_history=alpha_history if dynamic_alpha else None,
+                      spearman_history=spearman_history if dynamic_alpha else None)
 
     writer.close()
 
