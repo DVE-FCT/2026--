@@ -9,9 +9,10 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, classifica
 from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 from torch.amp import autocast
 from tqdm import tqdm
-from config import Common
+from PIL import Image
+from config import Common, Train
 from model import model as weatherModel
-from data_loader import testLoader
+from data_loader import testLoader, test_dataset
 
 
 # ============================================================
@@ -31,6 +32,75 @@ def get_latest_model_dir():
         raise FileNotFoundError(f"未找到任何 model_X 文件夹: {MODEL_ROOT}")
     latest_idx = max(indices)
     return os.path.join(MODEL_ROOT, f"model_{latest_idx}"), latest_idx
+
+
+def save_misclassified_images(test_dataset, all_labels, all_preds, run_dir):
+    """
+    保存所有错分图片用于人工分析。
+    每个错分类别对保存最多 Train.misclassified_per_pair_limit 张图片。
+    """
+    labels_list = Common.labels
+    per_pair_limit = Train.misclassified_per_pair_limit if hasattr(Train, 'misclassified_per_pair_limit') else 30
+
+    test_samples = test_dataset.samples
+
+    misclassified_by_pair = {}
+    for i, (pred, label) in enumerate(zip(all_preds, all_labels)):
+        if pred != label:
+            true_label = labels_list[label]
+            pred_label = labels_list[pred]
+            pair = (true_label, pred_label)
+
+            if pair not in misclassified_by_pair:
+                misclassified_by_pair[pair] = []
+            image_path, _ = test_samples[i]
+            misclassified_by_pair[pair].append({'image_path': image_path})
+
+    misclassified_dir = os.path.join(run_dir, "misclassified_images")
+    os.makedirs(misclassified_dir, exist_ok=True)
+
+    saved_count = {}
+    for pair, samples in misclassified_by_pair.items():
+        true_label, pred_label = pair
+        pair_dir = os.path.join(misclassified_dir, f"{true_label}_to_{pred_label}")
+        os.makedirs(pair_dir, exist_ok=True)
+
+        selected = samples[:per_pair_limit]
+        pair_saved = 0
+        for idx, sample in enumerate(selected):
+            image_path = sample['image_path']
+            original_filename = os.path.basename(image_path)
+            save_name = f"{idx:03d}_{original_filename}"
+            save_path = os.path.join(pair_dir, save_name)
+            try:
+                img = Image.open(image_path)
+                img.save(save_path)
+                img.close()
+                pair_saved += 1
+            except Exception as e:
+                print(f"  保存图片失败: {image_path} -> {e}")
+
+        saved_count[pair] = pair_saved
+        print(f"  {true_label} -> {pred_label}: 保存 {pair_saved} 张（总共 {len(samples)} 个错分）")
+
+    # 汇总报告
+    summary_path = os.path.join(misclassified_dir, "misclassification_summary.txt")
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        f.write("错分图片保存汇总\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"每对保存上限：{per_pair_limit} 张\n\n")
+        f.write("=" * 50 + "\n")
+        f.write(f"{'类别对':<30} {'错分数':<10} {'已保存':<10}\n")
+        f.write("-" * 50 + "\n")
+        for pair in sorted(misclassified_by_pair.keys(), key=lambda p: len(misclassified_by_pair[p]), reverse=True):
+            true_label, pred_label = pair
+            total = len(misclassified_by_pair[pair])
+            saved = saved_count.get(pair, 0)
+            f.write(f"{true_label} -> {pred_label:<20} {total:<10} {saved:<10}\n")
+
+    print(f"\n错分图片已保存至: {misclassified_dir}")
+    print(f"汇总报告: {summary_path}")
+    return misclassified_dir
 
 
 run_dir, run_idx = get_latest_model_dir()
@@ -173,6 +243,10 @@ def test():
     plt.savefig(cm_path, dpi=300)
     print(f"混淆矩阵已保存至: {cm_path}")
     plt.close()
+
+    # ========== 保存错分图片用于人工分析 ==========
+    if Train.save_misclassified_images:
+        save_misclassified_images(test_dataset, all_labels, all_preds, run_dir)
 
 
 if __name__ == '__main__':

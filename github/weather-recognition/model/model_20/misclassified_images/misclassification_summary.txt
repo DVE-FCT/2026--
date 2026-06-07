@@ -1,0 +1,43 @@
+错分图片保存汇总
+==================================================
+
+每对保存上限：30 张
+
+==================================================
+类别对                            错分数        已保存       
+--------------------------------------------------
+cloudy -> rainy                178        30        
+cloudy -> sunny                139        30        
+cloudy -> haze                 116        30        
+rainy -> cloudy               106        30        
+sunny -> cloudy               96         30        
+haze -> cloudy               91         30        
+snow -> haze                 36         30        
+rainy -> haze                 35         30        
+haze -> snow                 32         30        
+sunny -> snow                 31         30        
+cloudy -> snow                 30         30        
+haze -> sunny                30         30        
+haze -> rainy                28         28        
+snow -> rainy                22         22        
+sunny -> haze                 21         21        
+snow -> sunny                19         19        
+rainy -> thunder              18         18        
+rainy -> snow                 17         17        
+rainy -> sunny                16         16        
+sunny -> rainy                15         15        
+cloudy -> thunder              11         11        
+snow -> cloudy               10         10        
+haze -> thunder              9          9         
+sunny -> shine                6          6         
+sunny -> thunder              4          4         
+thunder -> cloudy               4          4         
+thunder -> haze                 3          3         
+shine -> cloudy               2          2         
+shine -> sunny                2          2         
+sunny -> sunrise              2          2         
+sunrise -> haze                 2          2         
+cloudy -> shine                1          1         
+shine -> snow                 1          1         
+sunrise -> cloudy               1          1         
+thunder -> rainy                1          1         

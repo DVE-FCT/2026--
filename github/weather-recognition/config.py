@@ -21,7 +21,7 @@ class Train:
     训练相关配置
     '''
     batch_size = 128
-    num_workers = 0  # 对于Windows用户，这里应设置为0，否则会出现多线程错误
+    num_workers = 4  # 数据加载进程数（Windows 多 worker 共享内存限制）
     lr = 0.001
     epochs = 100
     logDir = "./log/" + time.strftime('%Y-%m-%d-%H-%M-%S',time.gmtime()) # 日志存放位置
@@ -38,23 +38,27 @@ class Train:
 
     # Focal Loss 配置
     focal_loss_gamma = 1.0      # 聚焦参数，γ 越大越关注困难样本
-    focal_loss_alpha_source = "model_10_test"  # alpha 权重来源："model_10_test" 或 "manual"
-    # 基于 model_10 测试集每类准确率计算 alpha（准确率越低权重越高）
+    focal_loss_alpha_source = "model_18_test"  # alpha 权重来源："model_18_test" 或 "manual"
+    # 基于 model_18（数据清洗后）测试集每类准确率计算 alpha
     focal_loss_per_class_acc = {
-        "cloudy":  0.5867,
-        "haze":    0.8133,
-        "rainy":   0.8333,
-        "shine":   0.9487,
+        "cloudy":  0.6267,
+        "haze":    0.8400,
+        "rainy":   0.8067,
+        "shine":   1.0000,
         "snow":    0.8533,
-        "sunny":   0.7200,
+        "sunny":   0.7867,
         "sunrise": 0.9630,
-        "thunder": 0.9667,
+        "thunder": 0.9800,
     }
     focal_loss_alpha_eps = 0.01  # 计算 alpha 时的平滑项，避免除零
 
     # 数据增强与分层采样控制
     data_augmentation_enabled = True   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）
     stratified_split_enabled = True    # 是否启用分层划分（70/15/15），False 则随机划分
+
+    # 错分图片保存配置
+    save_misclassified_images = True    # 是否保存错分图片
+    misclassified_per_pair_limit = 30   # 每个错分类别对最多保存的图片数量
 
 
 

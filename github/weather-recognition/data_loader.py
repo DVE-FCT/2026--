@@ -42,10 +42,10 @@ else:
 
 class WeatherDataSet(Dataset):
     '''
-    自定义DataSet（惰性加载，按需读取图片，每类最多 max_per_class 张）
+    自定义DataSet（惰性加载，按需读取图片，使用完整数据集）
     '''
 
-    def __init__(self, max_per_class=1000, transform=None):
+    def __init__(self, max_per_class=None, transform=None):
         self.samples = []  # (image_path, label_index)
         self.transform = transform
         for d in os.listdir(Common.basePath):
@@ -55,7 +55,7 @@ class WeatherDataSet(Dataset):
             categoryIndex = Common.labels.index(d)
             image_files = [f for f in os.listdir(dir_path)
                            if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp'))]
-            if len(image_files) > max_per_class:
+            if max_per_class and len(image_files) > max_per_class:
                 image_files = np.random.choice(image_files, max_per_class, replace=False).tolist()
             for imagePath in image_files:
                 self.samples.append((os.path.join(dir_path, imagePath), categoryIndex))
@@ -76,20 +76,26 @@ class WeatherDataSet(Dataset):
         label_tensor = torch.tensor(label, dtype=torch.float)
         return image_tensor, label_tensor
 
+    @classmethod
+    def from_indices(cls, base_dataset, indices, transform=None):
+        """从已有 base_dataset 的索引子集创建 dataset，避免重复扫描文件"""
+        instance = cls.__new__(cls)
+        instance.samples = [base_dataset.samples[i] for i in indices]
+        instance.transform = transform
+        return instance
+
 
 # ============================================================
-# 构建数据集（每类最多 1000 张）
+# 构建数据集（使用完整数据，只扫描一次文件系统）
 # ============================================================
-# 训练集：有数据增强
-train_dataset = WeatherDataSet(max_per_class=1000, transform=train_transform)
-# 验证/测试集：无增强
-val_test_dataset = WeatherDataSet(max_per_class=1000, transform=test_transform)
+# 基础数据集（无 transform，仅存路径和标签）
+base_dataset = WeatherDataSet(transform=None)
 
 # 分层划分（保证每类 70/15/15 比例）
 train_indices, val_indices, test_indices = [], [], []
 if Train.stratified_split_enabled:
     for label_idx in range(len(Common.labels)):
-        label_indices = [i for i, (_, l) in enumerate(train_dataset.samples) if l == label_idx]
+        label_indices = [i for i, (_, l) in enumerate(base_dataset.samples) if l == label_idx]
         np.random.shuffle(label_indices)
         n = len(label_indices)
         train_n = int(n * 0.7)
@@ -98,7 +104,7 @@ if Train.stratified_split_enabled:
         val_indices.extend(label_indices[train_n:train_n + val_n])
         test_indices.extend(label_indices[train_n + val_n:])
 else:
-    all_indices = list(range(len(train_dataset.samples)))
+    all_indices = list(range(len(base_dataset.samples)))
     np.random.shuffle(all_indices)
     n = len(all_indices)
     train_n = int(n * 0.7)
@@ -107,15 +113,16 @@ else:
     val_indices = all_indices[train_n:train_n + val_n]
     test_indices = all_indices[train_n + val_n:]
 
-train_subset = torch.utils.data.Subset(train_dataset, train_indices)
-val_subset = torch.utils.data.Subset(val_test_dataset, val_indices)
-test_subset = torch.utils.data.Subset(val_test_dataset, test_indices)
+# 按 split 创建带 transform 的 dataset（避免重复扫描，transform 延迟应用）
+train_dataset = WeatherDataSet.from_indices(base_dataset, train_indices, transform=train_transform)
+val_dataset   = WeatherDataSet.from_indices(base_dataset, val_indices, transform=test_transform)
+test_dataset  = WeatherDataSet.from_indices(base_dataset, test_indices, transform=test_transform)
 
 # ============================================================
 # 数据加载器
 # ============================================================
 trainLoader = DataLoader(
-    train_subset,
+    train_dataset,
     batch_size=Train.batch_size,
     shuffle=True,
     num_workers=Train.num_workers,
@@ -123,7 +130,7 @@ trainLoader = DataLoader(
 )
 
 valLoader = DataLoader(
-    val_subset,
+    val_dataset,
     batch_size=Train.batch_size,
     shuffle=False,
     num_workers=Train.num_workers,
@@ -131,7 +138,7 @@ valLoader = DataLoader(
 )
 
 testLoader = DataLoader(
-    test_subset,
+    test_dataset,
     batch_size=Train.batch_size,
     shuffle=False,
     num_workers=Train.num_workers,
