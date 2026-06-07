@@ -168,11 +168,11 @@ def val_epoch(epoch, model, val_loader, criterion, optimizer, writer, history):
     return epoch_acc
 
 
-def compute_per_class_val_acc(model, val_loader):
-    """计算验证集每类的准确率，返回 dict"""
+def compute_per_class_val_metrics(model, val_loader):
+    """计算验证集每类的 acc 和 F1，返回 (per_class_acc, per_class_f1)"""
     model.eval()
-    class_correct = {c: 0 for c in Common.labels}
-    class_total = {c: 0 for c in Common.labels}
+    n = len(Common.labels)
+    conf_matrix = np.zeros((n, n), dtype=np.int64)
 
     with torch.no_grad():
         for data, label in val_loader:
@@ -182,17 +182,31 @@ def compute_per_class_val_acc(model, val_loader):
                 output = model(data)
             preds = torch.argmax(output, dim=1).cpu().numpy()
             labels_np = label_idx.cpu().numpy()
-
             for p, l in zip(preds, labels_np):
-                class_name = Common.labels[l]
-                class_total[class_name] += 1
-                if p == l:
-                    class_correct[class_name] += 1
+                conf_matrix[l, p] += 1
 
     per_class_acc = {}
-    for c in Common.labels:
-        per_class_acc[c] = class_correct[c] / class_total[c] if class_total[c] > 0 else 0.0
-    return per_class_acc
+    per_class_f1 = {}
+    for i, c in enumerate(Common.labels):
+        tp = conf_matrix[i, i]
+        fp = conf_matrix[:, i].sum() - tp
+        fn = conf_matrix[i, :].sum() - tp
+        total = conf_matrix[i, :].sum()
+        per_class_acc[c] = tp / total if total > 0 else 0.0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        per_class_f1[c] = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return per_class_acc, per_class_f1
+
+
+def make_alpha_target(difficulty, gamma=1.0, min_w=0.5, max_w=2.0, eps=1e-6):
+    """将难度映射为 alpha 权重：clamp(difficulty^γ, min, max) → 归一化到均值 1"""
+    difficulty = np.maximum(difficulty, eps)
+    target = difficulty ** gamma
+    target = np.clip(target, min_w, max_w)
+    target = target / (target.mean() + eps)
+    return target.tolist()
 
 
 def plot_alpha_spearman(alpha_history, spearman_history, alpha_source, save_path):
@@ -363,9 +377,15 @@ def main():
     eps = Train.focal_loss_alpha_eps
     alpha_source_label = Train.focal_loss_alpha_source
     alpha_update_interval = Train.dynamic_alpha_interval if hasattr(Train, 'dynamic_alpha_interval') else 5
+    warmup_epochs = Train.dynamic_alpha_warmup if hasattr(Train, 'dynamic_alpha_warmup') else 5
+    use_f1 = hasattr(Train, 'dynamic_alpha_use_f1') and Train.dynamic_alpha_use_f1
 
     if dynamic_alpha:
-        print(f"[Focal Loss] 动态 alpha 模式（每 {alpha_update_interval} epoch 更新，基于验证集 per-class acc）")
+        metric_label = "F1" if use_f1 else "acc"
+        print(f"[Focal Loss] 动态 alpha v2 模式")
+        print(f"  更新间隔: 每 {alpha_update_interval} epoch, warmup: {warmup_epochs} epoch")
+        print(f"  难度来源: per-class {metric_label}, EMA β={Train.dynamic_alpha_ema_beta if hasattr(Train, 'dynamic_alpha_ema_beta') else 0.8}")
+        print(f"  幅度控制: clamp=[{Train.dynamic_alpha_min if hasattr(Train, 'dynamic_alpha_min') else 0.5}, {Train.dynamic_alpha_max if hasattr(Train, 'dynamic_alpha_max') else 2.0}], γ={Train.dynamic_alpha_gamma if hasattr(Train, 'dynamic_alpha_gamma') else 1.0}")
         per_class_acc_init = Train.focal_loss_per_class_acc
         initial_alphas = [1.0 / (per_class_acc_init[c] + eps) for c in Common.labels]
         print(f"[Focal Loss] 初始 alpha 来源: {alpha_source_label}，之后动态调整")
@@ -423,25 +443,39 @@ def main():
             current_lr = optimizer.param_groups[0]['lr']
             writer.add_scalar("lr", current_lr, epoch)
 
-        # ---- 动态更新 alpha 权重 ----
-        if dynamic_alpha and epoch % alpha_update_interval == 0:
-            per_class_acc = compute_per_class_val_acc(model, valLoader)
-            difficulty = [1.0 - per_class_acc[c] for c in Common.labels]
-            new_alphas = [d / (sum(difficulty) + 1e-8) * len(Common.labels) for d in difficulty]
-            alpha_history[epoch] = new_alphas
+        # ---- 动态更新 alpha 权重 (v2: F1驱动 + warmup + EMA + clamp) ----
+        if dynamic_alpha and epoch >= warmup_epochs and epoch % alpha_update_interval == 0:
+            per_class_acc, per_class_f1 = compute_per_class_val_metrics(model, valLoader)
 
-            # 更新 criterion 中的 alpha
-            criterion.alpha = update_alpha_tensor(new_alphas).to(Common.device)
+            # 难度来源：F1 或 acc
+            use_f1 = hasattr(Train, 'dynamic_alpha_use_f1') and Train.dynamic_alpha_use_f1
+            metric_source = per_class_f1 if use_f1 else per_class_acc
+            metric_name = "F1" if use_f1 else "Acc"
+            difficulty = np.array([1.0 - metric_source[c] for c in Common.labels])
 
-            # 计算 Spearman ρ：alpha 权重 vs 类别难度
-            rho, _ = spearmanr(new_alphas, difficulty)
+            # target alpha：clamp(difficulty^γ, min, max) → 归一化
+            d_gamma = Train.dynamic_alpha_gamma if hasattr(Train, 'dynamic_alpha_gamma') else 1.0
+            d_min = Train.dynamic_alpha_min if hasattr(Train, 'dynamic_alpha_min') else 0.5
+            d_max = Train.dynamic_alpha_max if hasattr(Train, 'dynamic_alpha_max') else 2.0
+            target = make_alpha_target(difficulty, gamma=d_gamma, min_w=d_min, max_w=d_max)
+
+            # EMA 平滑
+            ema_beta = Train.dynamic_alpha_ema_beta if hasattr(Train, 'dynamic_alpha_ema_beta') else 0.8
+            old_alphas = criterion.alpha.cpu().numpy() if criterion.alpha is not None else np.array(target)
+            smooth_alphas = np.array(old_alphas) * ema_beta + np.array(target) * (1.0 - ema_beta)
+
+            alpha_history[epoch] = smooth_alphas.tolist()
+            criterion.alpha = update_alpha_tensor(smooth_alphas.tolist()).to(Common.device)
+
+            # Spearman ρ：alpha 排序 vs 困难度排序
+            rho, _ = spearmanr(smooth_alphas, difficulty)
             spearman_history[epoch] = rho
 
             # 打印
-            print(f"\n  [Alpha 更新] epoch {epoch}:")
-            print(f"  {'类别':<10} {'准确率':>8} {'难度':>8} {'alpha':>8}")
+            print(f"\n  [Alpha 更新] epoch {epoch} (难度来源: {metric_name}):")
+            print(f"  {'类别':<10} {metric_name+':':>8} {'难度':>8} {'alpha':>8}")
             for i, c in enumerate(Common.labels):
-                print(f"  {c:<10} {per_class_acc[c]:>8.4f} {difficulty[i]:>8.4f} {new_alphas[i]:>8.4f}")
+                print(f"  {c:<10} {metric_source[c]:>8.4f} {difficulty[i]:>8.4f} {smooth_alphas[i]:>8.4f}")
             print(f"  Spearman ρ = {rho:.4f}\n")
 
         if val_acc > best_acc + Train.early_stop_min_delta:
