@@ -201,11 +201,12 @@ def compute_per_class_val_metrics(model, val_loader):
 
 
 def make_alpha_target(difficulty, gamma=1.0, min_w=0.5, max_w=2.0, eps=1e-6):
-    """将难度映射为 alpha 权重：clamp(difficulty^γ, min, max) → 归一化到均值 1"""
+    """将难度映射为 alpha：归一化 → clamp → 再次归一化（均值保持 1）"""
     difficulty = np.maximum(difficulty, eps)
     target = difficulty ** gamma
-    target = np.clip(target, min_w, max_w)
-    target = target / (target.mean() + eps)
+    target = target / (target.mean() + eps)     # 归一化到均值 1
+    target = np.clip(target, min_w, max_w)      # 截断极端值
+    target = target / (target.mean() + eps)     # 截断后重新归一化
     return target.tolist()
 
 
@@ -308,9 +309,21 @@ def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epoch
         f.write(f"  device               : {Common.device}\n")
         f.write(f"  loss_function        : FocalLoss (gamma={Train.focal_loss_gamma})\n")
         f.write(f"  alpha来源             : {Train.focal_loss_alpha_source}\n")
+        f.write(f"  num_workers          : {Train.num_workers if hasattr(Train, 'num_workers') else 0}\n")
         if hasattr(Train, 'dynamic_alpha_enabled') and Train.dynamic_alpha_enabled:
             interval = Train.dynamic_alpha_interval if hasattr(Train, 'dynamic_alpha_interval') else 5
-            f.write(f"  alpha动态更新          : 启用（每 {interval} epoch）\n")
+            warmup = Train.dynamic_alpha_warmup if hasattr(Train, 'dynamic_alpha_warmup') else 5
+            use_f1 = Train.dynamic_alpha_use_f1 if hasattr(Train, 'dynamic_alpha_use_f1') else False
+            ema = Train.dynamic_alpha_ema_beta if hasattr(Train, 'dynamic_alpha_ema_beta') else 0.0
+            d_min = Train.dynamic_alpha_min if hasattr(Train, 'dynamic_alpha_min') else 0.2
+            d_max = Train.dynamic_alpha_max if hasattr(Train, 'dynamic_alpha_max') else 3.0
+            d_gamma = Train.dynamic_alpha_gamma if hasattr(Train, 'dynamic_alpha_gamma') else 1.0
+            f.write(f"  alpha动态更新          : 启用\n")
+            f.write(f"    更新间隔              : 每 {interval} epoch\n")
+            f.write(f"    warmup               : {warmup} epoch（前 {warmup} epoch alpha 全 1）\n")
+            f.write(f"    难度来源              : {'F1' if use_f1 else 'acc'}\n")
+            f.write(f"    EMA β                : {ema} {'(不使用)' if ema == 0 else ''}\n")
+            f.write(f"    幅度控制              : clamp=[{d_min}, {d_max}], γ={d_gamma}\n")
         else:
             f.write(f"  alpha动态更新          : 禁用\n")
         f.write(f"  lr_scheduler         : {Train.lr_scheduler if hasattr(Train, 'lr_scheduler') else 'None'}\n")
@@ -321,7 +334,8 @@ def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epoch
             f.write(f"  early_stop_patience   : {Train.early_stop_patience}\n")
             f.write(f"  early_stop_min_delta  : {Train.early_stop_min_delta}\n")
         f.write(f"  data_augmentation    : {'启用' if Train.data_augmentation_enabled else '禁用'}\n")
-        f.write(f"  stratified_split     : {'启用' if Train.stratified_split_enabled else '禁用'}\n\n")
+        f.write(f"  stratified_split     : {'启用' if Train.stratified_split_enabled else '禁用'}\n")
+        f.write(f"  save_misclassified   : {'启用' if getattr(Train, 'save_misclassified_images', False) else '禁用'}\n\n")
         f.write(f"--- 训练结果 ---\n")
         f.write(f"  最佳 epoch           : {best_epoch}/{epochs}\n")
         f.write(f"  最佳验证准确率         : {best_acc:.4f}\n\n")
@@ -382,10 +396,11 @@ def main():
 
     if dynamic_alpha:
         metric_label = "F1" if use_f1 else "acc"
-        print(f"[Focal Loss] 动态 alpha v2 模式")
-        print(f"  更新间隔: 每 {alpha_update_interval} epoch, warmup: {warmup_epochs} epoch")
-        print(f"  难度来源: per-class {metric_label}, EMA β={Train.dynamic_alpha_ema_beta if hasattr(Train, 'dynamic_alpha_ema_beta') else 0.8}")
-        print(f"  幅度控制: clamp=[{Train.dynamic_alpha_min if hasattr(Train, 'dynamic_alpha_min') else 0.5}, {Train.dynamic_alpha_max if hasattr(Train, 'dynamic_alpha_max') else 2.0}], γ={Train.dynamic_alpha_gamma if hasattr(Train, 'dynamic_alpha_gamma') else 1.0}")
+        print(f"[Focal Loss] 动态 alpha v4 模式")
+        print(f"  流程: warmup({warmup_epochs}ep) → 验证集 → {metric_label} → difficulty")
+        print(f"  target: difficulty^γ → 归一化 → clamp → 再归一化")
+        print(f"  EMA: β={Train.dynamic_alpha_ema_beta if hasattr(Train, 'dynamic_alpha_ema_beta') else 0.8}, 每 {alpha_update_interval} ep 更新")
+        print(f"  clamp: [{Train.dynamic_alpha_min if hasattr(Train, 'dynamic_alpha_min') else 0.5}, {Train.dynamic_alpha_max if hasattr(Train, 'dynamic_alpha_max') else 2.0}], γ={Train.dynamic_alpha_gamma if hasattr(Train, 'dynamic_alpha_gamma') else 1.0}")
         per_class_acc_init = Train.focal_loss_per_class_acc
         initial_alphas = [1.0 / (per_class_acc_init[c] + eps) for c in Common.labels]
         print(f"[Focal Loss] 初始 alpha 来源: {alpha_source_label}，之后动态调整")
@@ -405,6 +420,7 @@ def main():
     alpha_history = {}  # {epoch: [alpha_0, alpha_1, ...]}
     spearman_history = {}  # {epoch: rho}
     alpha_history[0] = initial_alphas.copy()
+    _ema_alphas = np.array(initial_alphas, dtype=np.float32)  # EMA 状态
 
     optimizer = optim.Adam(model.parameters(), lr=Train.lr)
 
@@ -443,7 +459,7 @@ def main():
             current_lr = optimizer.param_groups[0]['lr']
             writer.add_scalar("lr", current_lr, epoch)
 
-        # ---- 动态更新 alpha 权重 (v2: F1驱动 + warmup + EMA + clamp) ----
+        # ---- 动态更新 alpha 权重 (v4: F1驱动 + warmup + EMA + clamp) ----
         if dynamic_alpha and epoch >= warmup_epochs and epoch % alpha_update_interval == 0:
             per_class_acc, per_class_f1 = compute_per_class_val_metrics(model, valLoader)
 
@@ -453,30 +469,30 @@ def main():
             metric_name = "F1" if use_f1 else "Acc"
             difficulty = np.array([1.0 - metric_source[c] for c in Common.labels])
 
-            # target alpha：clamp(difficulty^γ, min, max) → 归一化
+            # target alpha: difficulty^γ → 归一化 → clamp → 再归一化
             d_gamma = Train.dynamic_alpha_gamma if hasattr(Train, 'dynamic_alpha_gamma') else 1.0
             d_min = Train.dynamic_alpha_min if hasattr(Train, 'dynamic_alpha_min') else 0.5
             d_max = Train.dynamic_alpha_max if hasattr(Train, 'dynamic_alpha_max') else 2.0
-            target = make_alpha_target(difficulty, gamma=d_gamma, min_w=d_min, max_w=d_max)
+            target = np.array(make_alpha_target(difficulty, gamma=d_gamma, min_w=d_min, max_w=d_max))
 
-            # EMA 平滑
+            # EMA 平滑：alpha = β×old + (1-β)×new
             ema_beta = Train.dynamic_alpha_ema_beta if hasattr(Train, 'dynamic_alpha_ema_beta') else 0.8
-            old_alphas = criterion.alpha.cpu().numpy() if criterion.alpha is not None else np.array(target)
-            smooth_alphas = np.array(old_alphas) * ema_beta + np.array(target) * (1.0 - ema_beta)
+            _ema_alphas = _ema_alphas * ema_beta + target * (1.0 - ema_beta)
+            _ema_alphas = _ema_alphas / _ema_alphas.mean()  # 保持均值 1
 
-            alpha_history[epoch] = smooth_alphas.tolist()
-            criterion.alpha = update_alpha_tensor(smooth_alphas.tolist()).to(Common.device)
+            alpha_history[epoch] = _ema_alphas.tolist()
+            criterion.alpha = update_alpha_tensor(_ema_alphas.tolist()).to(Common.device)
 
-            # Spearman ρ：alpha 排序 vs 困难度排序
-            rho, _ = spearmanr(smooth_alphas, difficulty)
+            # Spearman ρ：EMA 后的 alpha 排序 vs 当前难度排序（EMA 打破单调性 → ρ 有意义）
+            rho, _ = spearmanr(_ema_alphas, difficulty)
             spearman_history[epoch] = rho
 
             # 打印
-            print(f"\n  [Alpha 更新] epoch {epoch} (难度来源: {metric_name}):")
-            print(f"  {'类别':<10} {metric_name+':':>8} {'难度':>8} {'alpha':>8}")
+            print(f"\n  [Alpha 更新] epoch {epoch} (难度来源: {metric_name}, EMA β={ema_beta}):")
+            print(f"  {'类别':<10} {metric_name+':':>8} {'难度':>8} {'target':>8} {'alpha(EMA)':>10}")
             for i, c in enumerate(Common.labels):
-                print(f"  {c:<10} {metric_source[c]:>8.4f} {difficulty[i]:>8.4f} {smooth_alphas[i]:>8.4f}")
-            print(f"  Spearman ρ = {rho:.4f}\n")
+                print(f"  {c:<10} {metric_source[c]:>8.4f} {difficulty[i]:>8.4f} {target[i]:>8.4f} {_ema_alphas[i]:>10.4f}")
+            print(f"  Spearman ρ = {rho:.4f}  (EMA 后 alpha 与当前难度的排序一致性)\n")
 
         if val_acc > best_acc + Train.early_stop_min_delta:
             best_acc = val_acc

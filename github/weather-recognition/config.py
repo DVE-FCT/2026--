@@ -28,7 +28,7 @@ class Train:
     modelDir = "./model/" # 模型存放位置
 
     # 早停机制配置
-    early_stop_patience = 15   # 验证准确率无有效上升的最大 epochs 数
+    early_stop_patience = 10   # 验证准确率无有效上升的最大 epochs 数
     early_stop_min_delta = 0.005  # 被认为"有效上升"的最小阈值（提升至少 0.5%）
     early_stop_enabled = True    # 是否启用早停
 
@@ -52,22 +52,22 @@ class Train:
     }
     focal_loss_alpha_eps = 0.01  # 计算 alpha 时的平滑项，避免除零
 
-    # 动态 alpha 配置（v2：F1驱动 + warmup + EMA + clamp）
+    # 动态 alpha 配置（Model 24: acc驱动 + warmup=3 + 无EMA + clamp [0.2,3.0]）
     dynamic_alpha_enabled = True     # 是否启用动态 alpha
     dynamic_alpha_interval = 3       # 更新间隔（epoch）
-    dynamic_alpha_warmup = 5         # warmup 期：前 N epoch alpha 全 1
-    dynamic_alpha_use_f1 = True      # 难度来源：True=F1, False=acc
-    dynamic_alpha_ema_beta = 0.8     # EMA 平滑：alpha = β×old + (1-β)×new
+    dynamic_alpha_warmup = 3         # warmup 期：前 N epoch alpha 全 1
+    dynamic_alpha_use_f1 = True     # 难度来源：True=F1, False=acc
+    dynamic_alpha_ema_beta = 0.0     # EMA 平滑：0=不使用
     dynamic_alpha_gamma = 1.0        # 难度指数：difficulty^γ
-    dynamic_alpha_min = 0.5          # alpha 下限（clamp）
-    dynamic_alpha_max = 2.0          # alpha 上限（clamp）
+    dynamic_alpha_min = 0.2          # alpha 下限
+    dynamic_alpha_max = 3.0          # alpha 上限
 
     # 数据增强与分层采样控制
     data_augmentation_enabled = True   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）
     stratified_split_enabled = True    # 是否启用分层划分（70/15/15），False 则随机划分
 
     # 错分图片保存配置
-    save_misclassified_images = True    # 是否保存错分图片
+    save_misclassified_images = False    # 是否保存错分图片
     misclassified_per_pair_limit = 30   # 每个错分类别对最多保存的图片数量
 
 
