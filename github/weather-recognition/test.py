@@ -245,7 +245,7 @@ def test():
     plt.close()
 
     # ========== 保存错分图片用于人工分析 ==========
-    if Train.save_misclassified_images:
+    if getattr(Train, 'save_misclassified_images', False):
         save_misclassified_images(test_dataset, all_labels, all_preds, run_dir)
 
 
