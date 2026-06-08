@@ -17,7 +17,7 @@ class Common:
 
 
 class Train:
-    '''
+    '''     
     训练相关配置
     '''
     batch_size = 128
@@ -52,15 +52,15 @@ class Train:
     }
     focal_loss_alpha_eps = 0.01  # 计算 alpha 时的平滑项，避免除零
 
-    # 动态 alpha 配置（Model 24: acc驱动 + warmup=3 + 无EMA + clamp [0.2,3.0]）
+    # 动态 alpha 配置（Model 27: 梯度学习 — alpha 从验证集 loss 梯度优化）
     dynamic_alpha_enabled = True     # 是否启用动态 alpha
     dynamic_alpha_interval = 3       # 更新间隔（epoch）
-    dynamic_alpha_warmup = 3         # warmup 期：前 N epoch alpha 全 1
-    dynamic_alpha_use_f1 = True     # 难度来源：True=F1, False=acc
-    dynamic_alpha_ema_beta = 0.0     # EMA 平滑：0=不使用
-    dynamic_alpha_gamma = 1.0        # 难度指数：difficulty^γ
-    dynamic_alpha_min = 0.2          # alpha 下限
-    dynamic_alpha_max = 3.0          # alpha 上限
+    dynamic_alpha_warmup = 5         # warmup 期：前 N epoch alpha 全 1
+    dynamic_alpha_learned = True     # True: 梯度学习, False: 公式计算 target→EMA
+    dynamic_alpha_lr = 0.01          # alpha 学习率（梯度下降步长）
+    dynamic_alpha_momentum = 0.9     # alpha 动量（SGD momentum）
+    dynamic_alpha_min = 0.1          # alpha 下限（clamp）
+    dynamic_alpha_max = 4.0          # alpha 上限（clamp）
 
     # 数据增强与分层采样控制
     data_augmentation_enabled = True   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）
@@ -69,6 +69,9 @@ class Train:
     # 错分图片保存配置
     save_misclassified_images = False    # 是否保存错分图片
     misclassified_per_pair_limit = 30   # 每个错分类别对最多保存的图片数量
+
+    # 模型保存配置
+    save_last_model = False              # 是否保存训练结束时的最后一个模型
 
 
 
