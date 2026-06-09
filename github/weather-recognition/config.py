@@ -52,15 +52,16 @@ class Train:
     }
     focal_loss_alpha_eps = 0.01  # 计算 alpha 时的平滑项，避免除零
 
-    # 动态 alpha 配置（Model 27: 梯度学习 — alpha 从验证集 loss 梯度优化）
+    # 动态 alpha 配置（Model 31: F1 梯度 + clamp 对齐 Model22 自然范围）
     dynamic_alpha_enabled = True     # 是否启用动态 alpha
     dynamic_alpha_interval = 3       # 更新间隔（epoch）
-    dynamic_alpha_warmup = 5         # warmup 期：前 N epoch alpha 全 1
-    dynamic_alpha_learned = True     # True: 梯度学习, False: 公式计算 target→EMA
-    dynamic_alpha_lr = 0.01          # alpha 学习率（梯度下降步长）
-    dynamic_alpha_momentum = 0.9     # alpha 动量（SGD momentum）
-    dynamic_alpha_min = 0.1          # alpha 下限（clamp）
-    dynamic_alpha_max = 4.0          # alpha 上限（clamp）
+    dynamic_alpha_warmup = 0         # warmup 期：0=从 epoch 1 开始调整
+    dynamic_alpha_learned = True     # True: 梯度学习, False: 公式计算
+    dynamic_alpha_grad_mode = "f1_balance"  # "f1_balance"=低F1类获高alpha, "val_loss"=已废弃
+    dynamic_alpha_lr = 0.5           # alpha 学习率
+    dynamic_alpha_momentum = 0.1     # alpha 动量（低惯性）
+    dynamic_alpha_min = 0.5          # alpha 下限（匹配 Model22 自然 range）
+    dynamic_alpha_max = 2.0          # alpha 上限（匹配 Model22 自然 range）
 
     # 数据增强与分层采样控制
     data_augmentation_enabled = True   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）

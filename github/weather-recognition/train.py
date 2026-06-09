@@ -66,7 +66,7 @@ class FocalLoss(nn.Module):
 
 
 def update_alpha_tensor(alpha_list):
-    """将 alpha list 转为归一化的 tensor"""
+    """将 alpha list 转为归一化 tensor：均值保持为 1（总权重 = 类别数）"""
     t = torch.tensor(alpha_list, dtype=torch.float)
     return t / t.sum() * len(Common.labels)
 
@@ -168,17 +168,14 @@ def val_epoch(epoch, model, val_loader, criterion, optimizer, writer, history):
     return epoch_acc
 
 
-def compute_alpha_gradient(model, val_loader, current_alpha, gamma, device):
-    """计算 val_loss 对 alpha 的梯度 — alpha 从验证集学习，不参与训练反传"""
+def compute_alpha_grad_val_loss(model, val_loader, current_alpha, gamma, device):
+    """[已废弃] val_loss 对 alpha 的梯度几乎为零，无法驱动学习。保留作为对照。"""
     alpha_param = torch.tensor(current_alpha, device=device, dtype=torch.float, requires_grad=True)
-
     model.eval()
     total_samples = 0
-
     for data, label in val_loader:
         data = data.to(device)
         label_idx = torch.argmax(label, dim=1).to(device)
-
         with autocast('cuda'):
             output = model(data)
             log_probs = F.log_softmax(output, dim=1)
@@ -187,20 +184,32 @@ def compute_alpha_gradient(model, val_loader, current_alpha, gamma, device):
             focal_each = (1 - pt) ** gamma * ce
             alpha_w = alpha_param.gather(0, label_idx)
             loss = (focal_each * alpha_w).mean()
-
         total_samples += data.size(0)
-        loss.backward()  # 累积梯度到 alpha_param
-
+        loss.backward()
     if alpha_param.grad is not None:
         grad = alpha_param.grad.cpu().numpy() / max(total_samples, 1)
     else:
         grad = np.zeros_like(current_alpha)
+    return grad
 
+
+def compute_alpha_grad_f1(model, val_loader, current_alpha, device):
+    """F1 均衡梯度：低 F1 类得到更大的 alpha（增加权重），高 F1 类减少"""
+    _, per_class_f1 = compute_per_class_val_metrics(model, val_loader)
+    f1_array = np.array([per_class_f1[c] for c in Common.labels])
+    f1_mean = f1_array.mean()
+
+    # 梯度方向：F1 < 均值 → 负梯度 → alpha -= 负 → alpha ↑（增加困难类权重）
+    grad = (f1_array - f1_mean)
+    # 归一化到单位长度，避免幅度失控
+    norm = np.linalg.norm(grad)
+    if norm > 1e-8:
+        grad = grad / norm
     return grad
 
 
 def compute_per_class_val_metrics(model, val_loader):
-    """计算验证集每类的 acc 和 F1，返回 (per_class_acc, per_class_f1)"""
+    """在验证集上跑一遍，返回 (per_class_acc, per_class_f1) 两个 dict"""
     model.eval()
     n = len(Common.labels)
     conf_matrix = np.zeros((n, n), dtype=np.int64)
@@ -242,7 +251,7 @@ def make_alpha_target(difficulty, gamma=1.0, min_w=0.5, max_w=2.0, eps=1e-6):
 
 
 def plot_alpha_spearman(alpha_history, spearman_history, alpha_source, save_path):
-    """绘制 alpha 权重演化图和 Spearman ρ 检验图（1×2）"""
+    """绘制 1×2 图：(左) Spearman ρ 随 epoch 变化, (右) 各类 alpha 权重演化"""
     update_epochs = sorted(alpha_history.keys())
     labels = Common.labels
     n_classes = len(labels)
@@ -351,9 +360,11 @@ def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epoch
             f.write(f"    更新间隔              : 每 {interval} epoch\n")
             f.write(f"    warmup               : {warmup} epoch\n")
             if learned:
-                lr_a = Train.dynamic_alpha_lr if hasattr(Train, 'dynamic_alpha_lr') else 0.01
+                lr_a = Train.dynamic_alpha_lr if hasattr(Train, 'dynamic_alpha_lr') else 0.05
                 mom = Train.dynamic_alpha_momentum if hasattr(Train, 'dynamic_alpha_momentum') else 0.9
-                f.write(f"    模式                  : 梯度学习（alpha -= lr × ∇val_loss）\n")
+                mode = Train.dynamic_alpha_grad_mode if hasattr(Train, 'dynamic_alpha_grad_mode') else "f1_balance"
+                mode_label = {"f1_balance": "F1均衡（低F1→高alpha）", "val_loss": "val_loss（已废弃）"}.get(mode, mode)
+                f.write(f"    模式                  : 梯度学习（{mode_label}）\n")
                 f.write(f"    alpha lr             : {lr_a}\n")
                 f.write(f"    alpha momentum       : {mom}\n")
             else:
@@ -434,10 +445,11 @@ def main():
     if dynamic_alpha:
         learned = hasattr(Train, 'dynamic_alpha_learned') and Train.dynamic_alpha_learned
         if learned:
-            lr_a = Train.dynamic_alpha_lr if hasattr(Train, 'dynamic_alpha_lr') else 0.01
+            lr_a = Train.dynamic_alpha_lr if hasattr(Train, 'dynamic_alpha_lr') else 0.05
             mom = Train.dynamic_alpha_momentum if hasattr(Train, 'dynamic_alpha_momentum') else 0.9
-            print(f"[Focal Loss] 动态 alpha 梯度学习模式")
-            print(f"  alpha = alpha - lr × ∇(val_loss)")
+            mode = Train.dynamic_alpha_grad_mode if hasattr(Train, 'dynamic_alpha_grad_mode') else "f1_balance"
+            mode_label = {"f1_balance": "F1均衡（低F1→高alpha）", "val_loss": "val_loss（废弃）"}.get(mode, mode)
+            print(f"[Focal Loss] 动态 alpha 梯度学习模式: {mode_label}")
             print(f"  lr={lr_a}, momentum={mom}, warmup={warmup_epochs}ep")
             print(f"  clamp: [{Train.dynamic_alpha_min if hasattr(Train, 'dynamic_alpha_min') else 0.1}, {Train.dynamic_alpha_max if hasattr(Train, 'dynamic_alpha_max') else 4.0}]")
         else:
@@ -515,32 +527,40 @@ def main():
 
             if learned:
                 # === 梯度学习模式 ===
-                # 1. 计算 d(val_loss)/d(alpha)
-                alpha_lr = Train.dynamic_alpha_lr if hasattr(Train, 'dynamic_alpha_lr') else 0.01
+                alpha_lr = Train.dynamic_alpha_lr if hasattr(Train, 'dynamic_alpha_lr') else 0.05
                 alpha_momentum = Train.dynamic_alpha_momentum if hasattr(Train, 'dynamic_alpha_momentum') else 0.9
-                grad = compute_alpha_gradient(model, valLoader, _ema_alphas,
-                                              gamma=Train.focal_loss_gamma, device=Common.device)
+                grad_mode = Train.dynamic_alpha_grad_mode if hasattr(Train, 'dynamic_alpha_grad_mode') else "f1_balance"
 
-                # 2. SGD with momentum
+                if grad_mode == "f1_balance":
+                    # 方案 A：F1 均衡梯度 — 最大化最小 F1
+                    grad = compute_alpha_grad_f1(model, valLoader, _ema_alphas, device=Common.device)
+                    grad_label = "F1均衡"
+                else:
+                    # 原方案：val_loss 梯度（已废弃）
+                    grad = compute_alpha_grad_val_loss(model, valLoader, _ema_alphas,
+                                                        gamma=Train.focal_loss_gamma, device=Common.device)
+                    grad_label = "val_loss"
+
+                # SGD with momentum
                 alpha_velocity = alpha_momentum * alpha_velocity + (1 - alpha_momentum) * grad
                 _ema_alphas = _ema_alphas - alpha_lr * alpha_velocity
 
-                # 3. clamp + normalize
+                # clamp + normalize
                 _ema_alphas = np.clip(_ema_alphas, d_min, d_max)
                 _ema_alphas = _ema_alphas / _ema_alphas.mean()
 
                 alpha_history[epoch] = _ema_alphas.tolist()
                 criterion.alpha = update_alpha_tensor(_ema_alphas.tolist()).to(Common.device)
 
-                # Spearman: 学出来的 alpha 是否对准困难类
+                # Spearman
                 rho, _ = spearmanr(_ema_alphas, difficulty)
                 spearman_history[epoch] = rho
 
-                print(f"\n  [Alpha 学习] epoch {epoch} (梯度下降, lr={alpha_lr}, momentum={alpha_momentum}):")
+                print(f"\n  [Alpha 学习] epoch {epoch} ({grad_label}, lr={alpha_lr}):")
                 print(f"  {'类别':<10} {'F1':>8} {'难度':>8} {'梯度':>10} {'alpha':>8}")
                 for i, c in enumerate(Common.labels):
                     print(f"  {c:<10} {per_class_f1[c]:>8.4f} {difficulty[i]:>8.4f} {grad[i]:>10.6f} {_ema_alphas[i]:>8.4f}")
-                print(f"  Spearman ρ = {rho:.4f}  (学习到的 alpha 与当前难度的排序一致性)\n")
+                print(f"  Spearman ρ = {rho:.4f}\n")
             else:
                 # === 公式计算模式（回退） ===
                 target = np.array(make_alpha_target(difficulty, gamma=1.0, min_w=d_min, max_w=d_max))
