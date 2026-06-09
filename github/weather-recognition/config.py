@@ -51,6 +51,8 @@ class Train:
         "thunder": 0.9800,
     }
     focal_loss_alpha_eps = 0.01  # 计算 alpha 时的平滑项，避免除零
+    dynamic_alpha_enabled = True     # 是否启用动态 alpha 更新（基于验证集 per-class acc 调整）
+    dynamic_alpha_interval = 3       # 动态 alpha 更新间隔（epoch）
 
     # 动态 alpha 配置（Model 31: F1 梯度 + clamp 对齐 Model22 自然范围）
     dynamic_alpha_enabled = True     # 是否启用动态 alpha
