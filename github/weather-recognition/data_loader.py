@@ -9,11 +9,14 @@ from PIL import Image
 import numpy as np
 
 # ============================================================
-# 验证/测试集 transform（无数据增强）
+# 验证/测试集 transform（无数据增强，尺寸自动匹配 backbone）
 # ============================================================
+_IMG_SIZE = Train.get_image_size()
+_RESIZE = int(_IMG_SIZE / 0.875)  # 例如 224/0.875=256, 299/0.875=342
+
 test_transform = transforms.Compose([
-    transforms.Resize(256),
-    transforms.CenterCrop(224),
+    transforms.Resize(_RESIZE),
+    transforms.CenterCrop(_IMG_SIZE),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                          std=[0.229, 0.224, 0.225])
@@ -24,7 +27,7 @@ test_transform = transforms.Compose([
 # ============================================================
 if Train.data_augmentation_enabled:
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
+        transforms.RandomResizedCrop(_IMG_SIZE, scale=(0.7, 1.0)),
         transforms.RandomHorizontalFlip(),
         transforms.ColorJitter(
             brightness=0.25,

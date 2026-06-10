@@ -20,7 +20,7 @@ class Train:
     '''     
     训练相关配置
     '''
-    batch_size = 64  # ConvNeXt + 8GB 显存用 64 更安全
+    batch_size = 96  # ResNet101 42.5M + 224×224 8GB 安全
     num_workers = 4  # 数据加载进程数
     lr = 0.001
     epochs = 100
@@ -51,12 +51,23 @@ class Train:
         "thunder": 0.9800,
     }
     focal_loss_alpha_eps = 0.01  # 计算 alpha 时的平滑项，避免除零
-    # 模型架构
-    backbone = "convnext_tiny"       # "resnet50" / "convnext_tiny"
+    # 模型架构（image_size 自动匹配 backbone 的最佳输入尺寸）
+    backbone = "resnet101"           # resnet50/resnet101/convnext_tiny/convnext_small/inception_v3/efficientnet_b3
+
+    @classmethod
+    def get_image_size(cls):
+        return {
+            "resnet50":        224,
+            "resnet101":       224,
+            "convnext_tiny":   224,
+            "convnext_small":  224,
+            "inception_v3":    299,
+            "efficientnet_b3": 300,
+        }.get(cls.backbone, 224)
 
     # 动态 alpha 配置（Model 22 公式，ConvNeXt 基线）
     dynamic_alpha_enabled = True     # 是否启用动态 alpha
-    dynamic_alpha_interval = 1       # 更新间隔（epoch）
+    dynamic_alpha_interval = 3       # 更新间隔（epoch）
     dynamic_alpha_warmup = 0         # warmup：0=无 warmup
     dynamic_alpha_learned = False    # False=公式计算（M22 最优方案）
     dynamic_alpha_from_train = True  # True=训练集算alpha, 验证集算Spearman（独立评估）

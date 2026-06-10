@@ -593,12 +593,16 @@ def main():
                     print(f"  {c:<10} {src_f1[c]:>10.4f} {_ema_alphas[i]:>10.4f} {vl_f1[c]:>10.4f} {val_difficulty[i]:>14.4f}")
                 print(f"  Spearman ρ = {rho:.4f}  (train-alpha vs val-difficulty)\n")
 
-        if val_acc > best_acc + Train.early_stop_min_delta:
+        prev_best = best_acc
+        if val_acc > best_acc:
             best_acc = val_acc
             best_epoch = epoch
-            epochs_no_improve = 0
             torch.save(model.state_dict(), os.path.join(run_dir, f"best{sf}.pt"))
             print(f">>> 新的最佳模型! Epoch:{epoch} ValAcc:{val_acc:.4f} 已保存")
+
+        # early_stop_min_delta 仅用于早停计数器
+        if val_acc > prev_best + Train.early_stop_min_delta:
+            epochs_no_improve = 0
         else:
             epochs_no_improve += 1
 

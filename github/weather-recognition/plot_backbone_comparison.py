@@ -4,6 +4,7 @@ Backbone 对比气泡图: 横轴=推理速度(ms/张) 纵轴=参数量(M) 气泡
 import sys, os, time, importlib
 sys.path.insert(0, ".")
 import numpy as np
+np.random.seed(42)
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -66,6 +67,7 @@ def benchmark_one(backbone_name, model_dir):
 
 
 BACKBONES = [
+    ("ResNet101",   "resnet101",       "./model/model_38", None,   "#E09F2B"),  # TBD
     ("ResNet50",    "resnet50",        "./model/model_22", 0.9394, "#4C72B0"),
     ("ConvNeXt-T",  "convnext_tiny",   "./model/model_34", 0.9286, "#DD8452"),
     ("ConvNeXt-S",  "convnext_small",  "./model/model_35", 0.9031, "#55A868"),
@@ -77,17 +79,39 @@ results = []
 for name, bb, path, f1, color in BACKBONES:
     try:
         ms_img, params_m = benchmark_one(bb, path)
+        # 若 F1 未指定，从 test_result 自动读取
+        if f1 is None:
+            import re
+            tf = path + "/test_result_" + path.split("/")[-1] + ".txt"
+            with open(tf, encoding='utf-8') as fh:
+                for line in fh:
+                    m = re.search(r'Macro F1\s+([\d.]+)', line)
+                    if m:
+                        f1 = float(m.group(1))
+                        break
         results.append((name, bb, params_m, ms_img, f1, color))
         print(f"{name:12s} | {params_m:.1f}M | {ms_img:.2f}ms | F1={f1:.4f}")
     except Exception as e:
-        print(f"{name}: ERROR {e}")
+        print(f"{name}: SKIP ({e})")
 
+results = [r for r in results if r[4] is not None]  # 过滤未训练的
 results.sort(key=lambda x: x[4], reverse=True)
+
+# 气泡大小 = 相对 F1 比例映射到 300-800 范围
+f1_vals = [r[4] for r in results]
+f1_min, f1_max = min(f1_vals), max(f1_vals)
+MIN_SIZE, MAX_SIZE = 200, 700
+
+def bubble_size(f1):
+    if f1_max == f1_min:
+        return MAX_SIZE
+    return MIN_SIZE + (f1 - f1_min) / (f1_max - f1_min) * (MAX_SIZE - MIN_SIZE)
 
 # ---- 绘图 ----
 fig, ax = plt.subplots(figsize=(12, 8), dpi=150)
 for name, bb, params_m, ms_img, f1, color in results:
-    ax.scatter(ms_img, params_m, s=f1 * 500, alpha=0.7, color=color,
+    sz = bubble_size(f1)
+    ax.scatter(ms_img, params_m, s=sz, alpha=0.7, color=color,
                edgecolors='white', linewidths=1.5, zorder=3)
     ax.annotate(f"{name}\n{f1*100:.1f}% {ms_img:.1f}ms",
                 xy=(ms_img, params_m), xytext=(8, 8), textcoords='offset points',
@@ -95,7 +119,8 @@ for name, bb, params_m, ms_img, f1, color in results:
                 fontproperties=CJK_FONT)
 
 for name, bb, params_m, ms_img, f1, color in results:
-    ax.scatter([], [], s=f1 * 500, alpha=0.7, color=color,
+    sz = bubble_size(f1)
+    ax.scatter([], [], s=sz, alpha=0.7, color=color,
                edgecolors='white', linewidths=1.5,
                label=f"{name}  F1={f1:.4f}  {ms_img:.1f}ms  {params_m:.1f}M")
 
