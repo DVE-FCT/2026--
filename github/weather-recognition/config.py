@@ -20,8 +20,8 @@ class Train:
     '''     
     训练相关配置
     '''
-    batch_size = 128
-    num_workers = 4  # 数据加载进程数（Windows 多 worker 共享内存限制）
+    batch_size = 64  # ConvNeXt + 8GB 显存用 64 更安全
+    num_workers = 4  # 数据加载进程数
     lr = 0.001
     epochs = 100
     logDir = "./log/" + time.strftime('%Y-%m-%d-%H-%M-%S',time.gmtime()) # 日志存放位置
@@ -51,19 +51,15 @@ class Train:
         "thunder": 0.9800,
     }
     focal_loss_alpha_eps = 0.01  # 计算 alpha 时的平滑项，避免除零
-    dynamic_alpha_enabled = True     # 是否启用动态 alpha 更新（基于验证集 per-class acc 调整）
-    dynamic_alpha_interval = 3       # 动态 alpha 更新间隔（epoch）
+    # 模型架构
+    backbone = "convnext_tiny"       # "resnet50" / "convnext_tiny"
 
-    # 动态 alpha 配置（Model 31: F1 梯度 + clamp 对齐 Model22 自然范围）
+    # 动态 alpha 配置（Model 22 公式，ConvNeXt 基线）
     dynamic_alpha_enabled = True     # 是否启用动态 alpha
-    dynamic_alpha_interval = 3       # 更新间隔（epoch）
-    dynamic_alpha_warmup = 0         # warmup 期：0=从 epoch 1 开始调整
-    dynamic_alpha_learned = True     # True: 梯度学习, False: 公式计算
-    dynamic_alpha_grad_mode = "f1_balance"  # "f1_balance"=低F1类获高alpha, "val_loss"=已废弃
-    dynamic_alpha_lr = 0.5           # alpha 学习率
-    dynamic_alpha_momentum = 0.1     # alpha 动量（低惯性）
-    dynamic_alpha_min = 0.5          # alpha 下限（匹配 Model22 自然 range）
-    dynamic_alpha_max = 2.0          # alpha 上限（匹配 Model22 自然 range）
+    dynamic_alpha_interval = 1       # 更新间隔（epoch）
+    dynamic_alpha_warmup = 0         # warmup：0=无 warmup
+    dynamic_alpha_learned = False    # False=公式计算（M22 最优方案）
+    dynamic_alpha_from_train = True  # True=训练集算alpha, 验证集算Spearman（独立评估）
 
     # 数据增强与分层采样控制
     data_augmentation_enabled = True   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）

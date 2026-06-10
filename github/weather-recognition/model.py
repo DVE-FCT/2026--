@@ -3,24 +3,48 @@ from torch import nn
 import torchvision.models as models
 from config import Common, Train
 
-net = models.resnet50(weights='DEFAULT')
-net.fc = nn.Identity()  # 让 net(x) 输出 2048 维特征（而非 1000 维分类输出）
+
+def build_backbone(name):
+    """根据配置创建 backbone，返回 (net, feature_dim)"""
+    if name == "resnet50":
+        net = models.resnet50(weights="DEFAULT")
+        net.fc = nn.Identity()
+        dim = 2048
+    elif name == "convnext_tiny":
+        net = models.convnext_tiny(weights="DEFAULT")
+        net.classifier[2] = nn.Identity()
+        dim = 768
+    else:
+        raise ValueError(f"不支持的 backbone: {name}")
+    return net, dim
 
 
 class WeatherModel(nn.Module):
-    def __init__(self, net):
-        super(WeatherModel, self).__init__()
-        self.net = net
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.1)
-        self.fc = nn.Linear(2048, 8)  # 2048 维特征 -> 8 类
+    def __init__(self, backbone, feature_dim, num_classes, dropout=0.2):
+        super().__init__()
+        self.backbone = backbone
+        self.classifier = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(feature_dim, num_classes)
+        )
 
     def forward(self, x):
-        x = self.net(x)  # 输出 2048 维特征
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.fc(x)  # 输出原始 logits（无 Softmax，CrossEntropyLoss/FocalLoss 内部处理）
+        x = self.backbone(x)
+        x = self.classifier(x)
         return x
 
 
-model = WeatherModel(net)
+def build_model():
+    """创建模型实例，返回 (model, backbone_name, feature_dim)"""
+    backbone_name = getattr(Train, "backbone", "resnet50")
+    backbone_net, feature_dim = build_backbone(backbone_name)
+    model = WeatherModel(
+        backbone=backbone_net,
+        feature_dim=feature_dim,
+        num_classes=len(Common.labels),
+        dropout=0.2,
+    )
+    return model, backbone_name, feature_dim
+
+
+model, BACKBONE_NAME, FEATURE_DIM = build_model()

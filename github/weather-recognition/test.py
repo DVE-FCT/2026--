@@ -11,7 +11,6 @@ from torch.amp import autocast
 from tqdm import tqdm
 from PIL import Image
 from config import Common, Train
-from model import model as weatherModel
 from data_loader import testLoader, test_dataset
 
 
@@ -103,22 +102,21 @@ def save_misclassified_images(test_dataset, all_labels, all_preds, run_dir):
     return misclassified_dir
 
 
-run_dir, run_idx = get_latest_model_dir()
-SF = f"_model_{run_idx}"  # 文件名后缀，与文件夹编号匹配
-
-model_path = os.path.join(run_dir, f"best{SF}.pt")
-
-model = weatherModel
-model.to(Common.device)
-model.load_state_dict(torch.load(model_path, map_location=Common.device))
-model.eval()
-print(f"已加载模型: {model_path}")
-print(f"测试输出目录: {run_dir}")
-
-criterion = nn.CrossEntropyLoss()
-
-
 def test():
+    from model import model as weatherModel
+
+    run_dir, run_idx = get_latest_model_dir()
+    SF = f"_model_{run_idx}"
+    model_path = os.path.join(run_dir, f"best{SF}.pt")
+
+    model = weatherModel
+    model.to(Common.device)
+    model.load_state_dict(torch.load(model_path, map_location=Common.device))
+    model.eval()
+    print(f"已加载模型: {model_path}")
+    print(f"测试输出目录: {run_dir}")
+
+    criterion = nn.CrossEntropyLoss()
     all_preds = []
     all_labels = []
     testLoss = 0

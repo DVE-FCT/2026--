@@ -343,6 +343,7 @@ def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epoch
         f.write(f"训练时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}\n")
         f.write(f"模型目录: {run_dir}\n\n")
         f.write(f"--- 训练配置 ---\n")
+        f.write(f"  backbone            : {getattr(Train, 'backbone', 'resnet50')}\n")
         f.write(f"  epochs              : {epochs}\n")
         f.write(f"  batch_size          : {Train.batch_size}\n")
         f.write(f"  learning_rate        : {Train.lr}\n")
@@ -367,9 +368,9 @@ def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epoch
                 f.write(f"    模式                  : 梯度学习（{mode_label}）\n")
                 f.write(f"    alpha lr             : {lr_a}\n")
                 f.write(f"    alpha momentum       : {mom}\n")
+                f.write(f"    clamp                : [{d_min}, {d_max}]\n")
             else:
-                f.write(f"    模式                  : 公式计算（difficulty → normalize → clamp → EMA）\n")
-            f.write(f"    clamp                : [{d_min}, {d_max}]\n")
+                f.write(f"    模式                  : M22 公式（alpha = difficulty/mean）\n")
         else:
             f.write(f"  alpha动态更新          : 禁用\n")
         f.write(f"  lr_scheduler         : {Train.lr_scheduler if hasattr(Train, 'lr_scheduler') else 'None'}\n")
@@ -434,6 +435,9 @@ def main():
 
     model = weatherModel
     model.to(Common.device)
+    from model import BACKBONE_NAME, FEATURE_DIM
+    total_m = sum(p.numel() for p in model.parameters()) / 1e6
+    print(f"[Model] backbone: {BACKBONE_NAME}, 特征维度: {FEATURE_DIM}, 参数量: {total_m:.2f}M")
 
     # ---- 初始 alpha 权重 ----
     dynamic_alpha = hasattr(Train, 'dynamic_alpha_enabled') and Train.dynamic_alpha_enabled
@@ -453,9 +457,9 @@ def main():
             print(f"  lr={lr_a}, momentum={mom}, warmup={warmup_epochs}ep")
             print(f"  clamp: [{Train.dynamic_alpha_min if hasattr(Train, 'dynamic_alpha_min') else 0.1}, {Train.dynamic_alpha_max if hasattr(Train, 'dynamic_alpha_max') else 4.0}]")
         else:
-            print(f"[Focal Loss] 动态 alpha 公式计算模式")
-            print(f"  target: difficulty → normalize → clamp → renormalize")
-            print(f"  EMA β=0.8, warmup={warmup_epochs}ep, 每 {alpha_update_interval} ep 更新")
+            print(f"[Focal Loss] 动态 alpha M22 公式模式")
+            print(f"  alpha = difficulty / mean(difficulty)（直接替换，无 EMA/clamp）")
+            print(f"  warmup={warmup_epochs}, 每 {alpha_update_interval} ep 更新")
         per_class_acc_init = Train.focal_loss_per_class_acc
         initial_alphas = [1.0 / (per_class_acc_init[c] + eps) for c in Common.labels]
         print(f"[Focal Loss] 初始 alpha 来源: {alpha_source_label}，之后动态调整")
@@ -515,15 +519,25 @@ def main():
             current_lr = optimizer.param_groups[0]['lr']
             writer.add_scalar("lr", current_lr, epoch)
 
-        # ---- 动态更新 alpha (Model 27: 梯度学习 — alpha 从验证集 loss 梯度优化) ----
+        # ---- 动态更新 alpha ----
         if dynamic_alpha and epoch >= warmup_epochs and epoch % alpha_update_interval == 0:
             learned = hasattr(Train, 'dynamic_alpha_learned') and Train.dynamic_alpha_learned
-
-            # 计算 per-class 指标（用于日志）
-            per_class_acc, per_class_f1 = compute_per_class_val_metrics(model, valLoader)
-            difficulty = np.array([1.0 - per_class_f1[c] for c in Common.labels])
+            use_train = hasattr(Train, 'dynamic_alpha_from_train') and Train.dynamic_alpha_from_train
             d_min = Train.dynamic_alpha_min if hasattr(Train, 'dynamic_alpha_min') else 0.1
             d_max = Train.dynamic_alpha_max if hasattr(Train, 'dynamic_alpha_max') else 4.0
+
+            # ---- 训练集：算 alpha 的难度来源 ----
+            tr_acc, tr_f1 = compute_per_class_val_metrics(model, trainLoader) if use_train else (None, None)
+            alpha_source = tr_f1 if use_train else None
+
+            # ---- 验证集：算 Spearman 的独立评估 ----
+            vl_acc, vl_f1 = compute_per_class_val_metrics(model, valLoader)
+            val_difficulty = np.array([1.0 - vl_f1[c] for c in Common.labels])
+
+            # 用于 alpha 更新的难度（训练集或验证集）
+            src_name = "train" if use_train else "val"
+            src_f1 = tr_f1 if use_train else vl_f1
+            difficulty = np.array([1.0 - src_f1[c] for c in Common.labels])
 
             if learned:
                 # === 梯度学习模式 ===
@@ -552,33 +566,32 @@ def main():
                 alpha_history[epoch] = _ema_alphas.tolist()
                 criterion.alpha = update_alpha_tensor(_ema_alphas.tolist()).to(Common.device)
 
-                # Spearman
-                rho, _ = spearmanr(_ema_alphas, difficulty)
+                # Spearman：用验证集难度评估
+                rho, _ = spearmanr(_ema_alphas, val_difficulty)
                 spearman_history[epoch] = rho
 
-                print(f"\n  [Alpha 学习] epoch {epoch} ({grad_label}, lr={alpha_lr}):")
-                print(f"  {'类别':<10} {'F1':>8} {'难度':>8} {'梯度':>10} {'alpha':>8}")
+                print(f"\n  [Alpha 学习] epoch {epoch} ({grad_label}, alpha←{src_name}集, lr={alpha_lr}):")
+                print(f"  {'类别':<10} {'F1('+src_name+')':>10} {'alpha('+src_name+')':>10} {'F1(val)':>10} {'梯度':>10}")
                 for i, c in enumerate(Common.labels):
-                    print(f"  {c:<10} {per_class_f1[c]:>8.4f} {difficulty[i]:>8.4f} {grad[i]:>10.6f} {_ema_alphas[i]:>8.4f}")
-                print(f"  Spearman ρ = {rho:.4f}\n")
+                    print(f"  {c:<10} {src_f1[c]:>10.4f} {_ema_alphas[i]:>10.4f} {vl_f1[c]:>10.4f} {grad[i]:>10.6f}")
+                print(f"  Spearman ρ = {rho:.4f}  (train-alpha vs val-difficulty)\n")
             else:
-                # === 公式计算模式（回退） ===
-                target = np.array(make_alpha_target(difficulty, gamma=1.0, min_w=d_min, max_w=d_max))
-                ema_beta = 0.8
-                _ema_alphas = _ema_alphas * ema_beta + target * (1.0 - ema_beta)
-                _ema_alphas = _ema_alphas / _ema_alphas.mean()
+                # === M22 公式计算 ===
+                _ema_alphas = difficulty / (difficulty.mean() + 1e-8)
 
                 alpha_history[epoch] = _ema_alphas.tolist()
                 criterion.alpha = update_alpha_tensor(_ema_alphas.tolist()).to(Common.device)
 
-                rho, _ = spearmanr(_ema_alphas, difficulty)
+                # Spearman：用验证集难度评估训练集推导的 alpha
+                rho, _ = spearmanr(_ema_alphas, val_difficulty)
                 spearman_history[epoch] = rho
 
-                print(f"\n  [Alpha 更新] epoch {epoch} (公式计算, EMA β=0.8):")
-                print(f"  {'类别':<10} {'F1':>8} {'难度':>8} {'alpha':>8}")
+                label = "独立评估" if use_train else "同源(恒为1)"
+                print(f"\n  [Alpha 公式] epoch {epoch} (alpha←{src_name}集, Spearman←val集 {label}):")
+                print(f"  {'类别':<10} {'F1('+src_name+')':>10} {'alpha('+src_name+')':>10} {'F1(val)':>10} {'难度(val)=1-F1':>14}")
                 for i, c in enumerate(Common.labels):
-                    print(f"  {c:<10} {per_class_f1[c]:>8.4f} {difficulty[i]:>8.4f} {_ema_alphas[i]:>8.4f}")
-                print(f"  Spearman ρ = {rho:.4f}\n")
+                    print(f"  {c:<10} {src_f1[c]:>10.4f} {_ema_alphas[i]:>10.4f} {vl_f1[c]:>10.4f} {val_difficulty[i]:>14.4f}")
+                print(f"  Spearman ρ = {rho:.4f}  (train-alpha vs val-difficulty)\n")
 
         if val_acc > best_acc + Train.early_stop_min_delta:
             best_acc = val_acc

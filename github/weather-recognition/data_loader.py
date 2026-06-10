@@ -121,26 +121,33 @@ test_dataset  = WeatherDataSet.from_indices(base_dataset, test_indices, transfor
 # ============================================================
 # 数据加载器
 # ============================================================
+_use_pin = Common.device.type == "cuda"   # 仅 CUDA 时 pin memory
+_use_nw  = Train.num_workers               # 简写
+
 trainLoader = DataLoader(
     train_dataset,
     batch_size=Train.batch_size,
     shuffle=True,
-    num_workers=Train.num_workers,
-    pin_memory=True
+    num_workers=_use_nw,
+    pin_memory=_use_pin,
+    persistent_workers=_use_nw > 0,
+    prefetch_factor=2 if _use_nw > 0 else None,
 )
 
 valLoader = DataLoader(
     val_dataset,
     batch_size=Train.batch_size,
     shuffle=False,
-    num_workers=Train.num_workers,
-    pin_memory=True
+    num_workers=_use_nw,
+    pin_memory=_use_pin,
+    persistent_workers=_use_nw > 0,
 )
 
 testLoader = DataLoader(
     test_dataset,
     batch_size=Train.batch_size,
     shuffle=False,
-    num_workers=Train.num_workers,
-    pin_memory=True
+    num_workers=_use_nw,
+    pin_memory=_use_pin,
+    persistent_workers=_use_nw > 0,
 )
