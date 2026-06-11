@@ -21,7 +21,7 @@ plt.rcParams['axes.unicode_minus'] = False
 from torch.utils.tensorboard import SummaryWriter
 from torch.amp import GradScaler, autocast
 from tqdm import tqdm
-from config import Common, Train
+from config import Common, Train, SEED
 from model import model as weatherModel
 from torch import optim
 
@@ -344,6 +344,7 @@ def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epoch
         f.write(f"模型目录: {run_dir}\n\n")
         f.write(f"--- 训练配置 ---\n")
         f.write(f"  backbone            : {getattr(Train, 'backbone', 'resnet50')}\n")
+        f.write(f"  random_seed         : {SEED}\n")
         f.write(f"  epochs              : {epochs}\n")
         f.write(f"  batch_size          : {Train.batch_size}\n")
         f.write(f"  learning_rate        : {Train.lr}\n")

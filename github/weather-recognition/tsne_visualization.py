@@ -27,10 +27,11 @@ def get_chinese_font():
         return None
 
 CJK_FONT = get_chinese_font()
-if CJK_FONT:
-    print(f"[字体] 使用中文字体: {FONT_PATH}")
-else:
-    print("[字体] 未找到中文字体，将使用默认字体")
+if __name__ == '__main__':
+    if CJK_FONT:
+        print(f"[字体] 使用中文字体: {FONT_PATH}")
+    else:
+        print("[字体] 未找到中文字体，将使用默认字体")
 
 warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial']
@@ -98,7 +99,7 @@ def get_feature_labels_from_loader(dataLoader, model, device, max_samples_per_cl
     with torch.no_grad():
         for data, label in dataLoader:
             data = data.to(device)
-            feat = model.net(data)  # 取 ResNet-50 backbone 特征（2048 维）
+            feat = model.backbone(data)  # 取 backbone 特征
             feat = feat.cpu().numpy()
 
             label_indices = torch.argmax(label, dim=1).numpy()

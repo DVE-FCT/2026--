@@ -138,7 +138,7 @@ ax.set_title("Backbone Comparison  |  Bubble = Macro F1  |  Top-Left = Best",
 ax.grid(True, alpha=0.3, linestyle='--')
 plt.tight_layout()
 plt.subplots_adjust(right=0.72)
-sp = "./model/backbone_comparison_bubble.png"
+sp = "./model/backbone_comparison_bubble_v2.png"
 plt.savefig(sp, dpi=150, bbox_inches='tight', facecolor='white')
 print(f"\nSaved: {sp}")
 plt.close()
