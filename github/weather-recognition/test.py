@@ -103,15 +103,15 @@ def save_misclassified_images(test_dataset, all_labels, all_preds, run_dir):
 
 
 def test():
-    from model import model as weatherModel
+    from model import build_model
 
     run_dir, run_idx = get_latest_model_dir()
     SF = f"_model_{run_idx}"
     model_path = os.path.join(run_dir, f"best{SF}.pt")
 
-    model = weatherModel
+    model, _, _ = build_model()
     model.to(Common.device)
-    model.load_state_dict(torch.load(model_path, map_location=Common.device))
+    model.load_state_dict(torch.load(model_path, map_location=Common.device, weights_only=True))
     model.eval()
     print(f"已加载模型: {model_path}")
     print(f"测试输出目录: {run_dir}")

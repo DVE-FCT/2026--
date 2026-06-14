@@ -39,7 +39,7 @@ class Train:
     modelDir = "./model/" # 模型存放位置
 
     # 早停机制配置
-    early_stop_patience = 100   # 验证准确率无有效上升的最大 epochs 数
+    early_stop_patience = 10   # 验证准确率无有效上升的最大 epochs 数
     early_stop_min_delta = 0.005  # 被认为"有效上升"的最小阈值（提升至少 0.5%）
     early_stop_enabled = True    # 是否启用早停
 
@@ -78,10 +78,16 @@ class Train:
 
     # 动态 alpha 配置（Model 22 公式，ConvNeXt 基线）
     dynamic_alpha_enabled = True     # 是否启用动态 alpha
-    dynamic_alpha_interval = 1       # 更新间隔（epoch）
+    dynamic_alpha_interval = 3       # 更新间隔（epoch）
     dynamic_alpha_warmup = 0         # warmup：0=无 warmup
     dynamic_alpha_learned = False    # False=公式计算（M22 最优方案）
     dynamic_alpha_from_train = True  # True=训练集算alpha, 验证集算Spearman（独立评估）
+
+    # SupCon 监督对比学习配置
+    supcon_enabled = True            # 是否启用 SupCon 辅助损失
+    supcon_lambda = 0.01             # SupCon 权重（辅助项，不主导训练）
+    supcon_temperature = 0.2         # 温度系数 τ（温和对比，适合天气边界模糊）
+    supcon_dim = 128                 # 投影头输出维度
 
     # 数据增强与分层采样控制
     data_augmentation_enabled = True   # 是否启用数据增强（RandomResizedCrop+Flip+ColorJitter）

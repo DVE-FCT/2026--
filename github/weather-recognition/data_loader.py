@@ -126,16 +126,57 @@ test_dataset  = WeatherDataSet.from_indices(base_dataset, test_indices, transfor
 # ============================================================
 _use_pin = Common.device.type == "cuda"   # 仅 CUDA 时 pin memory
 _use_nw  = Train.num_workers               # 简写
+_n_class = len(Common.labels)
 
-trainLoader = DataLoader(
-    train_dataset,
-    batch_size=Train.batch_size,
-    shuffle=True,
-    num_workers=_use_nw,
-    pin_memory=_use_pin,
-    persistent_workers=_use_nw > 0,
-    prefetch_factor=2 if _use_nw > 0 else None,
-)
+# SupCon 需要严格的 balanced batch: 每类固定样本数
+if getattr(Train, 'supcon_enabled', False):
+    _per_class = max(2, Train.batch_size // _n_class)
+    _labels = [s[1] for s in train_dataset.samples]
+    _class_bins = {c: [] for c in range(_n_class)}
+    for i, label in enumerate(_labels):
+        _class_bins[label].append(i)
+
+    class BalancedBatchSampler(torch.utils.data.Sampler):
+        def __init__(self, class_bins, per_class):
+            self.class_bins = class_bins
+            self.per_class = per_class
+            self.n_batches = len(train_dataset) // (per_class * _n_class)
+
+        def __iter__(self):
+            batches = []
+            for _ in range(self.n_batches):
+                batch = []
+                for c in range(_n_class):
+                    # 少数类 oversample，多数类 无放回抽样
+                    pool = self.class_bins[c]
+                    replace = len(pool) < self.per_class
+                    idxs = np.random.choice(pool, self.per_class, replace=replace)
+                    batch.extend(int(i) for i in idxs)
+                np.random.shuffle(batch)
+                batches.append(batch)
+            np.random.shuffle(batches)
+            for b in batches:
+                yield b
+
+        def __len__(self):
+            return self.n_batches
+
+    _sampler = BalancedBatchSampler(_class_bins, _per_class)
+    trainLoader = DataLoader(
+        train_dataset, batch_sampler=_sampler,
+        num_workers=_use_nw, pin_memory=_use_pin,
+        persistent_workers=_use_nw > 0, prefetch_factor=2 if _use_nw > 0 else None,
+    )
+else:
+    trainLoader = DataLoader(
+        train_dataset,
+        batch_size=Train.batch_size,
+        shuffle=True,
+        num_workers=_use_nw,
+        pin_memory=_use_pin,
+        persistent_workers=_use_nw > 0,
+        prefetch_factor=2 if _use_nw > 0 else None,
+    )
 
 valLoader = DataLoader(
     val_dataset,

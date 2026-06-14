@@ -316,14 +316,24 @@ def get_raw_pixel_features(max_samples_per_class=200, target_size=64):
 # 主程序：原始像素 t-SNE vs 训练后模型特征 t-SNE 对比
 # ============================================================
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', type=int, default=None, help='指定模型编号 (如 --model 40)')
+    args = parser.parse_args()
+
     from torch.utils.data import DataLoader
     from data_loader import trainLoader, valLoader
 
     random.seed(42)
     np.random.seed(42)
 
-    # 自动找最新模型
-    run_dir, run_idx = get_latest_model_dir()
+    if args.model:
+        run_dir = os.path.join(MODEL_ROOT, f"model_{args.model}")
+        run_idx = args.model
+        if not os.path.isdir(run_dir):
+            raise FileNotFoundError(f"未找到模型: {run_dir}")
+    else:
+        run_dir, run_idx = get_latest_model_dir()
     SF = f"_model_{run_idx}"
 
     print(f"\n{'='*60}")

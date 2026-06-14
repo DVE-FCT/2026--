@@ -22,7 +22,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 from config import Common, Train, SEED
-from model import model as weatherModel
+from model import build_model
 from torch import optim
 
 MODEL_ROOT = "./model"
@@ -65,6 +65,40 @@ class FocalLoss(nn.Module):
         return loss
 
 
+# ============================================================
+# SupCon Loss — 监督对比学习
+# ============================================================
+class SupConLoss(nn.Module):
+    """Supervised Contrastive Loss (Khosla et al., NeurIPS 2020)"""
+    def __init__(self, temperature=0.1):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, features, labels):
+        device = features.device
+        features = F.normalize(features.float(), dim=1)
+        n = features.shape[0]
+        if n < 2:
+            return torch.tensor(0.0, device=device)
+
+        sim = torch.matmul(features, features.T) / self.temperature
+        mask_diag = torch.eye(n, device=device, dtype=torch.bool)
+        sim = sim.masked_fill(mask_diag, -1e9)
+
+        labels = labels.contiguous().view(-1, 1)
+        pos_mask = labels.eq(labels.T).float()
+        pos_mask = pos_mask.masked_fill(mask_diag, 0.0)  # 去掉自己
+        pos_count = pos_mask.sum(dim=1)
+
+        valid = pos_count > 0
+        if valid.sum() == 0:
+            return features.sum() * 0.0  # 无正样本对，返回 0 梯度
+
+        log_prob = sim - torch.logsumexp(sim, dim=1, keepdim=True)
+        loss_per_sample = -(log_prob * pos_mask).sum(dim=1) / pos_count.clamp(min=1)
+        return loss_per_sample[valid].mean()
+
+
 def update_alpha_tensor(alpha_list):
     """将 alpha list 转为归一化 tensor：均值保持为 1（总权重 = 类别数）"""
     t = torch.tensor(alpha_list, dtype=torch.float)
@@ -93,52 +127,81 @@ def create_model_dir():
     return run_dir, idx
 
 
-def train_epoch(epoch, model, train_loader, criterion, optimizer, scaler, writer, history):
-    """训练一个 epoch"""
+def train_epoch(epoch, model, train_loader, criterion, optimizer, scaler, writer, history,
+                supcon_fn=None, supcon_w=0.0):
+    """训练一个 epoch，可选 SupCon 辅助损失"""
     model.train()
     epoch_loss = 0
+    epoch_cls = 0
+    epoch_sup = 0
     correct_num = 0
-    pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{Train.epochs} [Train]", ncols=100)
+    use_supcon = supcon_fn is not None and supcon_w > 0
+    pbar = tqdm(train_loader, desc=f"Ep {epoch}/{Train.epochs} [Tr]", ncols=120)
     for data, label in pbar:
         data, label = data.to(Common.device, non_blocking=True), label.to(Common.device, non_blocking=True)
         label_idx = torch.argmax(label, dim=1)
         batch_correct = 0
         optimizer.zero_grad()
         with autocast('cuda'):
-            output = model(data)
-            loss = criterion(output, label_idx)
+            if use_supcon:
+                logits, _, z = model(data, return_features=True)
+                cls_loss = criterion(logits, label_idx)
+            else:
+                logits = model(data)
+                cls_loss = criterion(logits, label_idx)
+
+        if use_supcon:
+            sup_loss = supcon_fn(z.float(), label_idx)
+            loss = cls_loss + supcon_w * sup_loss
+        else:
+            loss = cls_loss
+            sup_loss = cls_loss.detach() * 0.0  # 同 device/dtype
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         epoch_loss += loss.item() * data.size(0)
-        outputs = torch.argmax(output, dim=1)
+        epoch_cls += cls_loss.item() * data.size(0)
+        epoch_sup += sup_loss.item() * data.size(0)
+        outputs = torch.argmax(logits, dim=1)
         for i in range(len(label_idx)):
             if label_idx[i] == outputs[i]:
                 correct_num += 1
                 batch_correct += 1
         batch_acc = batch_correct / data.size(0)
         current_lr = optimizer.param_groups[0]['lr']
-        pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{batch_acc:.4f}", "lr": f"{current_lr:.2e}"})
+        if use_supcon:
+            pbar.set_postfix({"loss": f"{loss.item():.3f}", "cls": f"{cls_loss.item():.3f}",
+                              "sup": f"{sup_loss.item():.1f}", "acc": f"{batch_acc:.3f}"})
+        else:
+            pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{batch_acc:.4f}", "lr": f"{current_lr:.2e}"})
 
-    epoch_loss = epoch_loss / len(train_loader.dataset)
-    epoch_acc = correct_num / len(train_loader.dataset)
+    n = len(train_loader.dataset)
+    epoch_loss = epoch_loss / n
+    epoch_cls = epoch_cls / n
+    epoch_sup = epoch_sup / n
+    epoch_acc = correct_num / n
     current_lr = optimizer.param_groups[0]['lr']
-    print(f"Epoch:{epoch}\t Train Loss:{epoch_loss:.4f} \t Train Acc:{epoch_acc:.4f}\t LR:{current_lr:.2e}")
+    if use_supcon:
+        print(f"Epoch:{epoch}\t Train Loss:{epoch_loss:.4f} (cls:{epoch_cls:.4f} sup:{epoch_sup:.4f})\t Train Acc:{epoch_acc:.4f}\t LR:{current_lr:.2e}")
+    else:
+        print(f"Epoch:{epoch}\t Train Loss:{epoch_loss:.4f} \t Train Acc:{epoch_acc:.4f}\t LR:{current_lr:.2e}")
     writer.add_scalar("train_loss", epoch_loss, epoch)
     writer.add_scalar("train_acc", epoch_acc, epoch)
     writer.add_scalar("lr", current_lr, epoch)
     history["train_loss"].append(epoch_loss)
+    history["train_cls"].append(epoch_cls)
+    history["train_sup"].append(epoch_sup)
     history["train_acc"].append(epoch_acc)
     history["lr"].append(current_lr)
     return epoch_acc
 
 
 def val_epoch(epoch, model, val_loader, criterion, optimizer, writer, history):
-    """验证一个 epoch"""
+    """验证一个 epoch（仅分类 loss，不加 SupCon）"""
     model.eval()
     epoch_loss = 0
     correct_num = 0
-    pbar = tqdm(val_loader, desc=f"Epoch {epoch}/{Train.epochs} [Val  ]", ncols=100)
+    pbar = tqdm(val_loader, desc=f"Ep {epoch}/{Train.epochs} [Vl]", ncols=120)
     with torch.no_grad():
         for data, label in pbar:
             data, label = data.to(Common.device, non_blocking=True), label.to(Common.device, non_blocking=True)
@@ -157,8 +220,9 @@ def val_epoch(epoch, model, val_loader, criterion, optimizer, writer, history):
             current_lr = optimizer.param_groups[0]['lr']
             pbar.set_postfix({"loss": f"{loss.item():.4f}", "acc": f"{batch_acc:.4f}", "lr": f"{current_lr:.2e}"})
 
-        epoch_loss = epoch_loss / len(val_loader.dataset)
-        epoch_acc = correct_num / len(val_loader.dataset)
+        n = len(val_loader.dataset)
+        epoch_loss = epoch_loss / n
+        epoch_acc = correct_num / n
         current_lr = optimizer.param_groups[0]['lr']
         print(f"Epoch:{epoch}\t Val   Loss:{epoch_loss:.4f} \t Val   Acc:{epoch_acc:.4f}\t LR:{current_lr:.2e}")
         writer.add_scalar("val_loss", epoch_loss, epoch)
@@ -374,6 +438,12 @@ def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epoch
                 f.write(f"    模式                  : M22 公式（alpha = difficulty/mean）\n")
         else:
             f.write(f"  alpha动态更新          : 禁用\n")
+        if getattr(Train, 'supcon_enabled', False):
+            lmb = getattr(Train, 'supcon_lambda', 0.05)
+            tau = getattr(Train, 'supcon_temperature', 0.1)
+            f.write(f"  SupCon 损失            : 启用\n")
+            f.write(f"    λ                    : {lmb}\n")
+            f.write(f"    τ                    : {tau}\n")
         f.write(f"  lr_scheduler         : {Train.lr_scheduler if hasattr(Train, 'lr_scheduler') else 'None'}\n")
         if hasattr(Train, 'lr_scheduler') and Train.lr_scheduler == "CosineAnnealing":
             f.write(f"  lr_min               : {Train.lr_min}\n")
@@ -402,14 +472,27 @@ def save_training_log(run_dir, run_idx, sf, history, best_epoch, best_acc, epoch
                 f.write(f"{e:<8} " + " ".join([f"{v:>8.4f}" for v in alphas]) + f"{rho_str}\n")
 
         f.write(f"\n--- 指标变化 ---\n")
-        f.write(f"{'Epoch':<8} {'Train Loss':<12} {'Train Acc':<12} {'Val Loss':<12} {'Val Acc':<12} {'LR':<12}\n")
+        has_supcon = getattr(Train, 'supcon_enabled', False)
+        if has_supcon:
+            f.write(f"{'Epoch':<8} {'Train Loss':<10} {'Cls':<10} {'Sup':<10} {'Train Acc':<10} {'Val Loss':<10} {'Val Acc':<10} {'LR':<12}\n")
+        else:
+            f.write(f"{'Epoch':<8} {'Train Loss':<12} {'Train Acc':<12} {'Val Loss':<12} {'Val Acc':<12} {'LR':<12}\n")
         for i in range(len(history["train_loss"])):
             lr_val = history["lr"][i] if i < len(history["lr"]) else Train.lr
-            f.write(f"{i+1:<8} {history['train_loss'][i]:<12.4f} "
-                    f"{history['train_acc'][i]:<12.4f} "
-                    f"{history['val_loss'][i]:<12.4f} "
-                    f"{history['val_acc'][i]:<12.4f} "
-                    f"{lr_val:<12.6f}\n")
+            if has_supcon:
+                cls_val = history["train_cls"][i] if i < len(history.get("train_cls", [])) else 0
+                sup_val = history["train_sup"][i] if i < len(history.get("train_sup", [])) else 0
+                f.write(f"{i+1:<8} {history['train_loss'][i]:<10.4f} {cls_val:<10.4f} {sup_val:<10.4f} "
+                        f"{history['train_acc'][i]:<10.4f} "
+                        f"{history['val_loss'][i]:<10.4f} "
+                        f"{history['val_acc'][i]:<10.4f} "
+                        f"{lr_val:<12.6f}\n")
+            else:
+                f.write(f"{i+1:<8} {history['train_loss'][i]:<12.4f} "
+                        f"{history['train_acc'][i]:<12.4f} "
+                        f"{history['val_loss'][i]:<12.4f} "
+                        f"{history['val_acc'][i]:<12.4f} "
+                        f"{lr_val:<12.6f}\n")
         f.write(f"\n--- 完整路径 ---\n")
         f.write(f"  best.pt                 : {run_dir}/best{sf}.pt\n")
         if getattr(Train, 'save_last_model', True):
@@ -434,9 +517,8 @@ def main():
     print(f"训练输出目录: {run_dir}")
     print(f"{'='*60}\n")
 
-    model = weatherModel
+    model, BACKBONE_NAME, FEATURE_DIM = build_model()
     model.to(Common.device)
-    from model import BACKBONE_NAME, FEATURE_DIM
     total_m = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"[Model] backbone: {BACKBONE_NAME}, 特征维度: {FEATURE_DIM}, 参数量: {total_m:.2f}M")
 
@@ -476,6 +558,16 @@ def main():
     alpha_tensor = update_alpha_tensor(initial_alphas)
     criterion = FocalLoss(gamma=Train.focal_loss_gamma, alpha=alpha_tensor)
 
+    # ---- SupCon 辅助损失 ----
+    supcon_fn = None
+    supcon_w = 0.0
+    if getattr(Train, 'supcon_enabled', False):
+        supcon_fn = SupConLoss(
+            temperature=getattr(Train, 'supcon_temperature', 0.1)
+        )
+        supcon_w = getattr(Train, 'supcon_lambda', 0.05)
+        print(f"[SupCon] 启用, λ={supcon_w}, τ={Train.supcon_temperature if hasattr(Train,'supcon_temperature') else 0.1}")
+
     # ---- 记录 alpha 和 Spearman 历史 ----
     alpha_history = {}  # {epoch: [alpha_0, alpha_1, ...]}
     spearman_history = {}  # {epoch: rho}
@@ -501,7 +593,7 @@ def main():
     writer = SummaryWriter(log_dir=Train.logDir, flush_secs=500)
 
     history = {
-        "train_loss": [], "train_acc": [],
+        "train_loss": [], "train_cls": [], "train_sup": [], "train_acc": [],
         "val_loss": [],   "val_acc": [],
         "lr": []
     }
@@ -511,7 +603,8 @@ def main():
     epochs_no_improve = 0
 
     for epoch in range(1, Train.epochs + 1):
-        train_acc = train_epoch(epoch, model, trainLoader, criterion, optimizer, scaler, writer, history)
+        train_acc = train_epoch(epoch, model, trainLoader, criterion, optimizer, scaler, writer, history,
+                                supcon_fn=supcon_fn, supcon_w=supcon_w)
         val_acc = val_epoch(epoch, model, valLoader, criterion, optimizer, writer, history)
 
         # 更新学习率（CosineAnnealing）

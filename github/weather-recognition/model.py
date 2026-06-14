@@ -46,7 +46,8 @@ def build_backbone(name):
 
 
 class WeatherModel(nn.Module):
-    def __init__(self, backbone, feature_dim, num_classes, dropout=0.2, model_type=None):
+    def __init__(self, backbone, feature_dim, num_classes, dropout=0.2, model_type=None,
+                 supcon_dim=128):
         super().__init__()
         self.backbone = backbone
         self.classifier = nn.Sequential(
@@ -54,18 +55,29 @@ class WeatherModel(nn.Module):
             nn.Linear(feature_dim, num_classes)
         )
         self.model_type = model_type
-
-    def forward(self, x):
-        if self.model_type == "inception":
-            # InceptionV3 train 模式返回 (main, aux), eval 返回 main
-            if self.training:
-                x, _ = self.backbone(x)
-            else:
-                x = self.backbone(x)
+        self.supcon_dim = supcon_dim
+        if supcon_dim > 0:
+            self.projection_head = nn.Sequential(
+                nn.Linear(feature_dim, feature_dim),
+                nn.ReLU(),
+                nn.Linear(feature_dim, supcon_dim)
+            )
         else:
-            x = self.backbone(x)
-        x = self.classifier(x)
-        return x
+            self.projection_head = None
+
+    def forward(self, x, return_features=False):
+        if self.model_type == "inception":
+            if self.training:
+                features, _ = self.backbone(x)
+            else:
+                features = self.backbone(x)
+        else:
+            features = self.backbone(x)
+        logits = self.classifier(features)
+        if return_features:
+            z = self.projection_head(features) if self.projection_head is not None else features
+            return logits, features, z
+        return logits
 
 
 def build_model():
@@ -80,6 +92,7 @@ def build_model():
         num_classes=len(Common.labels),
         dropout=0.2,
         model_type=model_type,
+        supcon_dim=getattr(Train, "supcon_dim", 128),
     )
     return model, backbone_name, feature_dim
 
